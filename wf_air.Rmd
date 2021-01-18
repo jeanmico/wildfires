@@ -1,0 +1,207 @@
+---
+title: "Wildfires"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(ggplot2)
+library(tidyr)
+library(ggmap)
+library(rgdal)
+library(rgeos)
+library(maptools)
+library(dplyr)
+library(tmap)
+library(gstat)
+library(raster)
+library(sp)
+library(sf)
+```
+Read in the PM2.5 EPA data for 2018 (all of California)
+```{r}
+ca_pm25 = read.csv('~/wildfires/2018_CA_PM25_EPA.csv')
+```
+
+Rename columns for convenience
+```{r}
+colnames(ca_pm25) = c('date', 'source', 'site_id', 'poc', 'daily_mean_pm25', 'units', 'daily_aqi_value', 'site_name', 'daily_obs_count', 'percent_complete', 'aqs_parameter_code', 'aqs_parameter_desc', 'cbsa_code', 'cbsa_name', 'state_code', 'state', 'county_code', 'county', 'latitude', 'longitude')
+```
+
+Sort by date
+```{r}
+ca_pm25 <- ca_pm25 %>% mutate(datesort = as.Date(date, format='%m/%d/%Y'))
+```
+
+
+Explore the EPA data
+```{r}
+epa_ids = unique(ca_pm25$site_id)
+```
+How many EPA sensors do we have?
+```{r}
+print(length(epa_ids))
+```
+Select 5 sensors randomly and plot their data for the year
+```{r}
+plot_ids = sample(epa_ids, size=5)
+plot_df = ca_pm25 %>% filter(site_id %in% plot_ids)
+
+# sort by date
+
+ggplot(plot_df, aes(x=datesort, y=daily_mean_pm25, color = as.character(site_id), label=county)) +
+  geom_line() +
+  scale_color_brewer(palette="Accent") +
+  xlab("Date") +
+  ylab("Mean PM 2.5 concentration (\u03bcg/m\u00b3)") +
+  labs(color = "Sensor", labels = plot_df$county) +
+  scale_fill_discrete(breaks=plot_df$county)
+  
+```
+# Geographic analysis
+
+Get a dataframe of just the sensors with latitude and longitude
+```{r}
+sensors_epa = ca_pm25 %>% distinct(site_id, .keep_all=TRUE) %>% select(site_id, site_name, cbsa_code, cbsa_name, state_code, state, county_code, county, latitude, longitude)
+```
+
+construct a 'shapefile' out of the csv
+```{r}
+sensors_sf <- st_as_sf(ca_pm25, coords =c("longitude", "latitude"), crs=4326)
+```
+
+Display the sensors on a map
+```{r}
+tm_shape(sensors_sf) +
+  tm_dots(col='gray')
+```
+
+Testing out interpolation for a single day's readings
+```{r}
+day = as.Date('2018-11-15')
+day_df <- ca_pm25 %>% filter(datesort == day)
+coord_ref <- CRS("+proj=longlat +datum=WGS84")
+day_sp <- SpatialPointsDataFrame(coords = day_df[ , c("longitude", 'latitude')], data = day_df, proj4string=coord_ref)
+```
+
+IDW
+```{r}
+
+
+# create empty grid
+grd <- as.data.frame(spsample(day_sp, 'regular', n=50000))
+names(grd) <- c("longitude", "latitude")
+coordinates(grd) <- c('longitude', 'latitude')
+gridded(grd) <- TRUE
+fullgrid(grd) <- TRUE
+
+# add projection to empty grid
+proj4string(day_sp)
+crs(grd) <- proj4string(day_sp)
+
+# interpolate!
+day_sp.idw <- gstat::idw(daily_mean_pm25 ~ 1, day_sp, newdata=grd, idp=2.0)
+
+```
+Read in a map of the USA
+```{r}
+county_map = rgdal::readOGR('/Users/student/wildfires/cb_2018_us_county_5m')
+```
+Restrict the map to California
+```{r}
+ca_county_map <- subset(county_map, STATEFP == '06')
+ca_county_map <- spTransform(ca_county_map, CRS="+proj=longlat +datum=WGS84")
+```
+
+
+```{r}
+r <- raster(day_sp.idw)
+
+# clip to California
+r_clip <- mask(r, ca_county_map)
+
+# map the interpolated raster
+tm_shape(r_clip) +
+  tm_raster(n=10, palette = "YlOrRd", title="Interpolated PM2.5 concentration") +
+  tm_shape(day_sp) + tm_dots(size=.2) +
+  tm_legend(legend.outside=TRUE)
+```
+
+# PurpleAir data
+```{r}
+pa_pm25 = read.csv('~/wildfires/2018_bayarea_pm25_purple.csv')
+
+sensors_pa <- st_as_sf(pa_pm25, coords =c("lon", "lat"), crs=4326)
+
+tm_shape(sensors_pa) +
+  tm_dots(col='gray')
+```
+
+```{r}
+coord_ref <- CRS("+proj=longlat +datum=WGS84")
+pa_sp <- SpatialPointsDataFrame(coords = pa_pm25[ , c("lon", 'lat')], data = pa_pm25, proj4string=coord_ref)
+```
+
+```{r}
+
+
+# create empty grid
+grd <- as.data.frame(spsample(pa_sp, 'regular', n=50000))
+names(grd) <- c("longitude", "latitude")
+coordinates(grd) <- c('longitude', 'latitude')
+gridded(grd) <- TRUE
+fullgrid(grd) <- TRUE
+
+# add projection to empty grid
+proj4string(pa_sp)
+crs(grd) <- proj4string(pa_sp)
+
+# interpolate!
+pa_sp.idw <- gstat::idw(mean_pm25_atm ~ 1, pa_sp, newdata=grd, idp=2.0)
+
+```
+
+
+```{r}
+r <- raster(pa_sp.idw)
+
+# clip to California
+r_clip <- mask(r, ca_county_map)
+
+# map the interpolated raster
+tm_shape(r_clip) +
+  tm_raster(n=10, palette = "YlOrRd", title="Interpolated PM2.5 concentration") +
+  tm_shape(pa_sp) + tm_dots(size=.2) +
+  tm_legend(legend.outside=TRUE)
+```
+
+Evaluating the interpolation
+
+RMSE - leave one out validation
+```{r}
+IDW.out <- vector(length = length(pa_sp))
+
+# create a vector of models leaving one point out
+for (i in 1:length(P)) {
+  IDW.out[i] <- idw(mean_pm25_atm ~ 1, pa_sp[-i,], pa_sp[i,], idp=2.0)$var1.pred
+}
+
+# plot the predicted against the observed
+pred_obs_plt <- ggplot(aes(x = mean_pm25_atm, y = IDW.out), data = )
+```
+
+Try other ways of interpolating data
+
+# Kriging
+
+# Polynomial
+
+
+
+
+
+
+
