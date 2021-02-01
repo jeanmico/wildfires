@@ -1,0 +1,113 @@
+---
+title: "Wildfires - data exploration"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r echo=FALSE}
+library('lubridate')
+library('tidyverse')
+```
+
+```{r}
+base_addresses = read.csv('M:/wildfires/birth_file_bayarea.csv')
+
+# filter out any births here:
+# restrict to singletons
+```
+
+Our sample size is `r nrow(base_addresses)`. Counties included: Alameda, 
+
+# Exploratory figures
+
+How many pregnancies overlapped with the wildfire event? (what is the timeline of the event? let's say Nov 2018 for simplicity)
+
+compute start date (this is baby birth date - gestational age
+```{r}
+
+births <- base_addresses %>% mutate(baby_DOB = mdy(baby_DOB)) %>%
+  mutate(start_date = ymd(baby_DOB) - weeks(gest_weeks))
+
+```
+
+Now, how many pregnancies overlap with any date during the fire event? Create an interval to represent the fire and an interval to represent the pregnancy.
+```{r}
+# this definition of the fire interval may change as the project continues
+fire_start = '2018-11-01'
+fire_length = make_difftime(days = 30) 
+
+fire_intvl = as.interval(fire_length, ymd(fire_start))
+
+births <- births %>% mutate(preg_intvl = as.interval(make_difftime(weeks = gest_weeks), start_date))
+
+births <- births %>% mutate(preg_fire_ovrlp = int_overlaps(preg_intvl, fire_intvl))
+
+table(births$preg_fire_ovrlp)
+```
+Add the exposure info here:
+```{r}
+
+triweeks = 12
+tridays = triweeks*7
+
+
+births <- births %>% mutate(tri1 = as.interval(make_difftime(days = tridays), start_date),
+                            tri2 = case_when(int_end(tri1) + days(tridays) < baby_DOB ~
+                                               as.interval(make_difftime(days = tridays), int_end(tri1)),
+                                             TRUE ~ interval(int_end(tri1), baby_DOB)),
+                            tri3 = interval(int_end(tri2), baby_DOB)
+                            )
+
+
+# determine which trimester has the greatest overlap with the fire
+births <- births %>% mutate(overlap1 = case_when(int_overlaps(tri1, fire_intvl) ~ 
+                                                   as.duration(intersect(tri1, fire_intvl)),
+                                                 TRUE ~ 0),
+                            overlap2 = case_when(int_overlaps(tri2, fire_intvl) ~ 
+                                                   as.duration(intersect(tri2, fire_intvl)),
+                                                 TRUE ~ 0),
+                            overlap3 = case_when(int_overlaps(tri3, fire_intvl) ~ 
+                                                   as.duration(intersect(tri3, fire_intvl)),
+                                                 TRUE ~ 0) )
+
+# determine which trimester has the greatest overlap with the fire
+colnames(DF)[max.col(DF,ties.method="first")]
+a = data.frame(mycols = c('overlap1', 'overlap2', 'overlap3'))
+cols = c('overlap1', 'overlap2', 'overlap3')
+cols = a$mycols
+births <- births %>% mutate(exposure_tri = case_when(
+  overlap1 == 0 & overlap2 == 0 & overlap3 == 0 ~ '',
+  TRUE ~ cols[max.col(births %>% select(all_of(cols)))]
+      ))
+
+```
+
+Make a plot that 
+```{r pressure, echo=FALSE}
+births_dateplt <- births %>% arrange(desc(start_date)) %>% mutate(date_order = row_number())
+
+teimplt <- ggplot(births_dateplt, aes(as.Date(start_date), date_order, color=exposure_tri)) +
+  geom_crossbar(aes(xmin = as.Date(start_date), xmax = as.Date(baby_DOB)), width = 0.2) +
+  scale_color_manual(values=c("grey", '#003366', '#2c6d62', '#9d78ba', '#daa425', '#923a49')) +
+  geom_rect(aes(xmin=as.Date(int_start(fire_intvl)), xmax=as.Date(int_end(fire_intvl)), ymin=0, ymax=Inf),
+              color="orange", alpha=0.007, fill='orange') +
+  scale_x_date()
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+```{r}
+ggsave(teimplt, file = 'M:/wildfires/timeplot.png')
+
+
+```
