@@ -19,7 +19,7 @@ library('tidyverse')
 ```
 
 ```{r}
-base_addresses = read.csv('M:/wildfires/birth_file_bayarea.csv')
+base_addresses = read.csv('/Volumes/Padlock/wildfires/birth_file_bayarea2021-02-01.csv')
 
 # filter out any births here:
 # restrict to singletons
@@ -29,17 +29,25 @@ Our sample size is `r nrow(base_addresses)`. Counties included: Alameda,
 
 # Exploratory figures
 
-How many pregnancies overlapped with the wildfire event? (what is the timeline of the event? let's say Nov 2018 for simplicity)
-
-compute start date (this is baby birth date - gestational age
+Remove or correct NA values
 ```{r}
-
-births <- base_addresses %>% mutate(baby_DOB = mdy(baby_DOB)) %>%
-  mutate(start_date = ymd(baby_DOB) - weeks(gest_weeks))
-
+births = births %>% filter(!is.na(gest_weeks))
 ```
 
-Now, how many pregnancies overlap with any date during the fire event? Create an interval to represent the fire and an interval to represent the pregnancy.
+
+Apply a filter by gestational week: gestational weeks must be known, and <=41
+```{r}
+
+births = births %>% filter(gest_weeks < 42)
+```
+
+Determine the start of the pregnancy (baby birth date - gestational weeks)
+```{r}
+births <- base_addresses %>% mutate(baby_DOB = mdy(baby_DOB)) %>%
+  mutate(start_date = ymd(baby_DOB) - weeks(gest_weeks))
+```
+
+Define the fire period
 ```{r}
 # this definition of the fire interval may change as the project continues
 fire_start = '2018-11-01'
@@ -53,7 +61,8 @@ births <- births %>% mutate(preg_fire_ovrlp = int_overlaps(preg_intvl, fire_intv
 
 table(births$preg_fire_ovrlp)
 ```
-Add the exposure info here:
+
+Determine the length of exposure in each trimester and which trimester has the greatest length of exposure.
 ```{r}
 
 triweeks = 12
@@ -80,13 +89,10 @@ births <- births %>% mutate(overlap1 = case_when(int_overlaps(tri1, fire_intvl) 
                                                  TRUE ~ 0) )
 
 # determine which trimester has the greatest overlap with the fire
-colnames(DF)[max.col(DF,ties.method="first")]
-a = data.frame(mycols = c('overlap1', 'overlap2', 'overlap3'))
 cols = c('overlap1', 'overlap2', 'overlap3')
-cols = a$mycols
 births <- births %>% mutate(exposure_tri = case_when(
   overlap1 == 0 & overlap2 == 0 & overlap3 == 0 ~ '',
-  TRUE ~ cols[max.col(births %>% select(all_of(cols)))]
+  TRUE ~ cols[max.col(births %>% dplyr::select(all_of(cols)))]
       ))
 
 ```
@@ -95,7 +101,7 @@ Make a plot that
 ```{r pressure, echo=FALSE}
 births_dateplt <- births %>% arrange(desc(start_date)) %>% mutate(date_order = row_number())
 
-teimplt <- ggplot(births_dateplt, aes(as.Date(start_date), date_order, color=exposure_tri)) +
+timeplt <- ggplot(births_dateplt, aes(as.Date(start_date), date_order, color=exposure_tri)) +
   geom_crossbar(aes(xmin = as.Date(start_date), xmax = as.Date(baby_DOB)), width = 0.2) +
   scale_color_manual(values=c("grey", '#003366', '#2c6d62', '#9d78ba', '#daa425', '#923a49')) +
   geom_rect(aes(xmin=as.Date(int_start(fire_intvl)), xmax=as.Date(int_end(fire_intvl)), ymin=0, ymax=Inf),
@@ -107,7 +113,19 @@ Note that the `echo = FALSE` parameter was added to the code chunk to prevent pr
 
 
 ```{r}
-ggsave(teimplt, file = 'M:/wildfires/timeplot.png')
+ggsave(timeplt, file = '/Volumes/Padlock/wildfires/timeplot.png')
+
+
+```
+
+Simple 2x2 table
+```{r}
+library(epitools)
+```
+
+Test a very simple logistic regression model: outcome is preterm birth (binary), input is covariates and binary trimester exposure.
+
+```{r}
 
 
 ```
