@@ -21,6 +21,90 @@ library(raster)
 library(sp)
 library(sf)
 ```
+
+Constants and globals
+```{r}
+fname_img <<- paste('/Users/student/wildfires/images/', Sys.Date(), '_', sep = '')
+fname_csv <<- paste('/Users/student/wildfires/output/', Sys.Date(), '_', sep = '')
+```
+
+```{r}
+file_naming <- function(f_name, f_type) {
+  if (f_type == 'image') {
+    return(paste(fname_img, f_name, '.png', sep=''))
+  }
+  else if (f_type == 'csv') {
+    return(paste(fname_csv, f_name, '.csv', sep = ''))
+  }
+}
+
+```
+
+
+```{r}
+idw_interpolate <- function(data_sp, interp_col, grid_n, weight_power) {
+  # create empty grid
+  grd <- as.data.frame(spsample(data_sp, 'regular', n=grid_n))
+  names(grd) <- c("longitude", "latitude")
+  coordinates(grd) <- c('longitude', 'latitude')
+  gridded(grd) <- TRUE
+  fullgrid(grd) <- TRUE
+  
+  # add projection to empty grid
+  #proj4string(data_sp)
+  crs(grd) <- proj4string(data_sp)
+  
+  # interpolate!
+  data_sp_idw <- gstat::idw(!!interp_col ~ 1, data_sp, newdata=grd, idp=weight_power)
+  return(data_sp_idw)
+}
+```
+
+```{r}
+raster_map <- function(idw_sp, legend_show, rast_title, fname) {
+  r <- raster(idw_sp)
+  
+  # clip to California
+  r_clip <- mask(r, ca_county_map)
+  
+  # map the interpolated raster
+  rast_plt <- tm_shape(r_clip) +
+    tm_raster(n=10, palette = "YlOrRd", title=rast_title) +
+    tm_shape(idw_sp) + tm_dots(size=.2) +
+    tm_legend(legend.show=FALSE)
+  
+  rast_plt
+  
+  
+  
+  tmap_save(rast_plt + tm_layout(outer.margins = c(0,0,0,0)), file=file_name)
+}
+```
+
+
+
+# PurpleAir data
+```{r}
+pa_pm25 = read.csv('~/wildfires/2018_bayarea_pm25_purple.csv')
+pa_pm25 <- pa_pm25 %>% mutate(pm25_atm_corr = .39*mean_pm25_atm + 0.0024*mean_temp - .050*mean_humid,
+                              pm25_1_corr = .39*mean_pm25_atm + 0.0024*mean_temp - .050*mean_humid)
+
+# remove NA (do a better job of trying to fix NA)
+pa_pm25 <- pa_pm25 %>% filter(!is.na(pm25_atm_corr))
+
+sensors_pa <- st_as_sf(pa_pm25, coords =c("lon", "lat"), crs=4326)
+
+tm_shape(sensors_pa) +
+  tm_dots(col='gray')
+```
+
+```{r}
+coord_ref <- CRS("+proj=longlat +datum=WGS84")
+pa_sp <- SpatialPointsDataFrame(coords = pa_pm25[ , c("lon", 'lat')], data = pa_pm25, proj4string=coord_ref)
+```
+
+
+
 Read in the PM2.5 EPA data for 2018 (all of California)
 ```{r}
 ca_pm25 = read.csv('~/wildfires/2018_CA_PM25_EPA.csv')
@@ -39,6 +123,11 @@ ca_pm25 <- ca_pm25 %>% mutate(datesort = as.Date(date, format='%m/%d/%Y'))
 
 Explore the EPA data
 ```{r}
+# filter out the counties we don't want
+exclude_counties = read.csv('~/wildfires/exclude_county_sensors.csv')
+
+ca_pm25 <- ca_pm25 %>% filter(!(county_code %in% exclude_counties$code))
+
 epa_ids = unique(ca_pm25$site_id)
 ```
 How many EPA sensors do we have?
@@ -65,7 +154,7 @@ ggplot(plot_df, aes(x=datesort, y=daily_mean_pm25, color = as.character(site_id)
 
 Get a dataframe of just the sensors with latitude and longitude
 ```{r}
-sensors_epa = ca_pm25 %>% distinct(site_id, .keep_all=TRUE) %>% select(site_id, site_name, cbsa_code, cbsa_name, state_code, state, county_code, county, latitude, longitude)
+sensors_epa = ca_pm25 %>% distinct(site_id, .keep_all=TRUE) %>% dplyr::select(site_id, site_name, cbsa_code, cbsa_name, state_code, state, county_code, county, latitude, longitude)
 ```
 
 construct a 'shapefile' out of the csv
@@ -92,7 +181,7 @@ IDW
 
 
 # create empty grid
-grd <- as.data.frame(spsample(day_sp, 'regular', n=50000))
+grd <- as.data.frame(spsample(day_sp, 'regular', n=500000))
 names(grd) <- c("longitude", "latitude")
 coordinates(grd) <- c('longitude', 'latitude')
 gridded(grd) <- TRUE
@@ -103,7 +192,7 @@ proj4string(day_sp)
 crs(grd) <- proj4string(day_sp)
 
 # interpolate!
-day_sp.idw <- gstat::idw(daily_mean_pm25 ~ 1, day_sp, newdata=grd, idp=2.0)
+day_sp.idw <- gstat::idw(daily_mean_pm25 ~ 1, day_sp, newdata=grd, idp=4.0)
 
 ```
 Read in a map of the USA
@@ -124,27 +213,31 @@ r <- raster(day_sp.idw)
 r_clip <- mask(r, ca_county_map)
 
 # map the interpolated raster
-tm_shape(r_clip) +
-  tm_raster(n=10, palette = "YlOrRd", title="Interpolated PM2.5 concentration") +
+epaplt_full <- tm_shape(r_clip) +
+  tm_raster(n=10, palette = "YlOrRd", title="") +
   tm_shape(day_sp) + tm_dots(size=.2) +
-  tm_legend(legend.outside=TRUE)
-```
+  tm_legend(legend.outside=TRUE, legend.text.size=1.2)
 
-# PurpleAir data
-```{r}
-pa_pm25 = read.csv('~/wildfires/2018_bayarea_pm25_purple.csv')
+epaplt_full
 
-sensors_pa <- st_as_sf(pa_pm25, coords =c("lon", "lat"), crs=4326)
-
-tm_shape(sensors_pa) +
-  tm_dots(col='gray')
+tmap_save(epaplt_full, file='/Users/student/wildfires/20181115_epa_full.png',  outer.margins = c(0,0,0,0))
 ```
 
 ```{r}
-coord_ref <- CRS("+proj=longlat +datum=WGS84")
-pa_sp <- SpatialPointsDataFrame(coords = pa_pm25[ , c("lon", 'lat')], data = pa_pm25, proj4string=coord_ref)
+epaplt <- tm_shape(r_clip, bbox = pa_sp) +
+  tm_raster(n=10, palette = "YlOrRd", title="") +
+  tm_shape(day_sp) + tm_dots(size=.2) +
+  tm_legend(legend.outside=TRUE, legend.text.size=1.2)
+
+epaplt
+
+tmap_save(epaplt + tm_layout(outer.margins = c(0,0,0,0)), file='/Users/student/wildfires/20181115_epa.png',  outer.margins = c(0,0,0,0))
+
 ```
 
+
+
+Interpolate the uncorrected purpleair data
 ```{r}
 
 
@@ -160,7 +253,7 @@ proj4string(pa_sp)
 crs(grd) <- proj4string(pa_sp)
 
 # interpolate!
-pa_sp.idw <- gstat::idw(mean_pm25_atm ~ 1, pa_sp, newdata=grd, idp=2.0)
+pa_sp.idw <- gstat::idw(mean_pm25_atm ~ 1, pa_sp, newdata=grd, idp=4.0)
 
 ```
 
@@ -172,11 +265,58 @@ r <- raster(pa_sp.idw)
 r_clip <- mask(r, ca_county_map)
 
 # map the interpolated raster
-tm_shape(r_clip) +
-  tm_raster(n=10, palette = "YlOrRd", title="Interpolated PM2.5 concentration") +
+paplt <- tm_shape(r_clip) +
+  tm_raster(n=10, palette = "YlOrRd", title="Interpolated PM2.5") +
   tm_shape(pa_sp) + tm_dots(size=.2) +
-  tm_legend(legend.outside=TRUE)
+  tm_legend(legend.show=FALSE)
+
+paplt
+
+tmap_save(paplt + tm_layout(outer.margins = c(0,0,0,0)), file='/Users/student/wildfires/20181115_purpleair.png')
 ```
+
+Interpolate the corrected purpleair data
+```{r}
+
+
+# create empty grid
+grd <- as.data.frame(spsample(pa_sp, 'regular', n=50000))
+names(grd) <- c("longitude", "latitude")
+coordinates(grd) <- c('longitude', 'latitude')
+gridded(grd) <- TRUE
+fullgrid(grd) <- TRUE
+
+# add projection to empty grid
+proj4string(pa_sp)
+crs(grd) <- proj4string(pa_sp)
+
+# interpolate!
+pa_sp.idw <- gstat::idw(pm25_atm_corr ~ 1, pa_sp, newdata=grd, idp=4.0)
+
+```
+
+
+```{r}
+r <- raster(pa_sp.idw)
+
+# clip to California
+r_clip <- mask(r, ca_county_map)
+
+# map the interpolated raster
+papltc <- tm_shape(r_clip) +
+  tm_raster(n=10, palette = "YlOrRd", title="Interpolated PM2.5") +
+  tm_shape(pa_sp) + tm_dots(size=.2) +
+  tm_legend(legend.show=FALSE)
+  #tm_legend(legend.text.size=1.2, legend.outside=TRUE)
+
+papltc
+
+tmap_save(papltc + tm_layout(outer.margins = c(0,0,0,0)), file='/Users/student/wildfires/20181115_purpleair_corr.png')
+```
+
+
+
+
 
 Evaluating the interpolation
 
@@ -192,6 +332,8 @@ for (i in 1:length(P)) {
 # plot the predicted against the observed
 pred_obs_plt <- ggplot(aes(x = mean_pm25_atm, y = IDW.out), data = )
 ```
+
+Map out the locations of our hourly data sensors...are we missing any areas?
 
 Try other ways of interpolating data
 
