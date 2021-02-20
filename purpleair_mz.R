@@ -42,7 +42,36 @@ ba_unique_ids = unique(ba_ids)
 ba_pats <- vector(length = length(ba_unique_ids))
 
 bout <- b %>% pat_outliers(replace = TRUE, showPlot = TRUE)
-                  
+
+# check for long strings of identical values
+pm25a <- bout$data$pm25_A
+pm25a <- pm25a[!is.na(pm25a)]
+maxrle <- max(rle(pm25a)$lengths)
+
+pm25b <- bout$data$pm25_B
+pm25b <- pm25b[!is.na(pm25b)]
+
+max_repeats = 20
+
+if (maxrle > max_repeats) {
+  mychannel <- "B"
+}
+
+# poor correlation between A and B
+correlation_min <- .75
+
+ab_cor <- cor(pm25a, pm25b)
+
+if (ab_cor < correlation_min) {
+  print('bad correlation')
+}
+
+
+
+# extreme noise in A
+# https://mazamascience.github.io/AirSensor/articles/articles/Custom_QC_Algorithms.html#example-2-z-score-based-qc-1
+
+
 for (i in 1:length(ba_unique_ids)) {
   print(i)
   tmp <- pat_downloadParseRawData(
