@@ -1,0 +1,135 @@
+---
+title: "PurpleAir Selection"
+author: "Jean Costello"
+date: "2/24/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r read}
+qc_data = read.csv('~/wildfires/purple_qc_data_4.csv')
+```
+
+Number of sensors: `r nrow(qc_data)`
+
+Plot of the sensor start date
+
+Histogram of active days
+```{r day_hist}
+day_hist <- ggplot(qc_data, aes(x=ndays)) +
+  geom_histogram() + 
+  xlab("Number of days with data in Nov 2018") + 
+  ylab("Sensor count") + 
+  theme_minimal()
+
+day_hist
+```
+```{r correlation}
+corr_hist <- ggplot(qc_data, aes(x=ab_correlation)) + 
+  geom_histogram() + 
+  theme_minimal()
+
+
+corr_hist
+
+```
+Note that if one channel is missing (all NA), we assigned a correlation of 0.
+
+Number of sensors above 90%: `r nrow(filter(qc_data, ab_correlation > .9))`
+Number of sensors above 95%: `r nrow(filter(qc_data, ab_correlation > .95))`
+
+Restricting to the sensors that are above .9 correlation:
+```{r qc_filter}
+qc90 <- qc_data %>% filter(ab_correlation > .9)
+
+```
+
+Check repeats in these sensors
+```{r repeats_a}
+repeat_a_hist <- ggplot(qc90, aes(x=a_repeats)) +
+  geom_histogram() +
+  theme_minimal() +
+  xlab('Longest repeated value string in the A channel') + 
+  ylab('Sensor count')
+
+repeat_a_hist
+```
+```{r repeats_b}
+repeat_b_hist <- ggplot(qc90, aes(x=b_repeats)) +
+  geom_histogram() +
+  theme_minimal() +
+  xlab('Longest repeated value string in the B channel') + 
+  ylab('Sensor count')
+
+repeat_b_hist
+```
+
+Number of sensors with a repeat length <20: `r nrow(filter(qc_data, a_repeats<20))`
+
+Check the number of corrected values (outlier replaced)
+```{r outlier_a_hist}
+outliers_a_hist <- ggplot(qc90, aes(x=a_outlier_change)) +
+  geom_histogram() + 
+  theme_minimal()
+
+outliers_a_hist
+```
+
+```{r outlier_b_hist}
+outliers_b_hist <- ggplot(qc90, aes(x=b_outlier_change)) +
+  geom_histogram() + 
+  theme_minimal()
+
+outliers_b_hist
+```
+
+Check noise
+
+```{r noise_a_hist}
+noise_a_hist <- ggplot(qc90, aes(x=a_noise)) + 
+  geom_histogram() +
+  theme_minimal()
+
+noise_a_hist
+```
+
+```{r noise_b_hist}
+noise_b_hist <- ggplot(qc90, aes(x=b_noise)) + 
+  geom_histogram() +
+  theme_minimal()
+
+noise_b_hist
+```
+Narrow in our analysis to the sensors with a correlation > 90%
+```{r read_data}
+ids_list = unique(qc90$deviceDeploymentID)
+
+#TODO: read in files, use Mazama package to hourly or daily average, print smaller dataframe to speed this up!
+
+for (i in 1:length(ids_list)) {
+  fpath = '/Volumes/Padlock/purple_mz/'
+  fname_data = paste(fpath, ids_list[[i]], '_data.csv', sep='')
+  fname_meta = paste(fpath, ids_list[[i]], '_meta.csv', sep='') 
+  
+  read.csv(fname_data)
+  
+}
+```
+
+
+Check coverage of sensors with a correlation >90%
+
+Check that temperature and humidity are anticorrelated
+
+How many repeats and outliers are acceptable?
+
+
