@@ -109,22 +109,117 @@ noise_b_hist <- ggplot(qc90, aes(x=b_noise)) +
 
 noise_b_hist
 ```
-Narrow in our analysis to the sensors with a correlation > 90%
+Narrow in our analysis to the sensors with a correlation > 90%. 
+
+First, we'll aggregate the data to 1-hour and daily time periods. The daily data is what we'll use for our later analysis, but the hourly data gives us a better look at the data quality.
+
 ```{r read_data}
+library(readr)
+
 ids_list = unique(qc90$deviceDeploymentID)
 
 #TODO: read in files, use Mazama package to hourly or daily average, print smaller dataframe to speed this up!
+# cannot read in saved files and convert to pat object
+# see: https://github.com/MazamaScience/AirSensor/issues/260
 
 for (i in 1:length(ids_list)) {
   fpath = '/Volumes/Padlock/purple_mz/'
   fname_data = paste(fpath, ids_list[[i]], '_data.csv', sep='')
   fname_meta = paste(fpath, ids_list[[i]], '_meta.csv', sep='') 
   
-  read.csv(fname_data)
+  tmp_data = read_csv(fname_data)
+  tmp_meta = read_csv(fname_meta)
+  
+  pat_isPat(tmp_pat)
+  
+  # create a pat object
   
 }
 ```
 
+```{r testing}
+
+# download the PurpleAir data for the good ids
+# aggregate
+#    by hour
+#    by day
+# add some additional qc metrics (correlation between temp and humidity)
+
+setArchiveBaseUrl("http://data.mazamascience.com/PurpleAir/v1")
+all_pas <- pas_load()
+  
+qc_data_addl <- data.frame(matrix(ncol=2, nrow=0))
+
+colnames(qc_data_addl) = c('deviceDeploymentID', 'ht_correlation')
+fpath_hour = '/Volumes/Padlock/purple18_hourly/'
+fpath_day = '/Volumes/Padlock/purple18_daily/'
+fpath_stdev = '/Volumes/Padlock/purple18_stdev/'
+fname_qc = '/Volumes/Padlock/purple18_addlqc/humid_temp.csv'
+
+
+for (i in 1:length(ids_list)) {
+  
+  fname = paste(ids_list[[i]], '.csv', sep='')
+  fname_hour <- paste(fpath_hour, fname, sep = '')
+  fname_day <- paste(fpath_day, fname, sep = '')
+  fname_stddev <- paste(fpath_stdev, fname, sep = '')
+  
+  if (!(file.exists(fname_day))) {
+    
+    # download data
+    tmp <- pat_downloadParseRawData(
+      id = ids_list[[i]],
+      label = NULL,
+      pas = ba_pas,
+      startdate = '2018-10-31',
+      enddate = '2018-12-01',
+      timezone = "America/Los_Angeles",
+      baseUrl = "https://api.thingspeak.com/channels/"
+    )
+  
+    cmb <- pat_createPATimeseriesObject(tmp)
+    
+    humid <- cmb$data$humidity
+    temp <- cmb$data$temperature
+    
+    # check correlation between humidity and temp
+    if (sum(complete.cases(humid, temp)) > 0) {
+      ht_corr <- cor(humid, temp, use = "complete.obs")
+    } else {
+      ht_corr = 0
+    }
+    
+    qc_tmp = data.frame('deviceDeploymentID' = ids_list[[i]], 
+                        'ht_correlation' = ht_corr)
+    qc_data_addl <- rbind(qc_data_addl, qc_tmp)
+    
+    # aggregate hourly
+    cmb_hour <- pat_aggregate(cmb)
+  
+    # aggregate daily
+    cmb_day <- pat_aggregate(cmb, unit='hours', count=24)
+    
+    # 15 minute stdev
+
+    cmb_std <- pat_aggregate(cmb, 
+                  function(x) { sd(x, na.rm = TRUE) }, 
+                  unit = 'minutes', 
+                  count = 15)
+    
+    # write output
+    write.csv(cmb_hour$data, file=fname_hour, row.names = FALSE)
+    write.csv(cmb_day$data, file=fname_day, row.names = FALSE)
+    write.csv(cmb_std$data, file=fname_stddev, row.names = FALSE)
+
+  }
+
+}
+  
+write.csv(qc_data_addl, file=fname_qc, row.names=FALSE)  
+  
+```
+
+Merge the quality control data
 
 Check coverage of sensors with a correlation >90%
 
