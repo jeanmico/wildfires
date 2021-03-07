@@ -36,26 +36,52 @@ Remove or correct NA values
 births = births %>% filter(!is.na(gest_weeks))
 ```
 
+```{r rename vars}
+decodes = read.csv('~/wildfires/data_dict.csv')
+
+dropcols <- decodes %>% filter(varname == '') %>% select(rawname) # drop unneeded columns
+births_tmp <- births %>% select(-(dropcols$rawname))
+
+keepcols <- decodes%>% filter(varname != '')
+# create a named vector to use with dplyr::rename
+name_vec <- keepcols$rawname
+names(name_vec) <- keepcols$varname
+
+births_tmp <- births_tmp %>% dplyr::rename(name_vec[name_vec %in% names(births_tmp)])
+
+births <- births_tmp
+```
 
 Condense multiple binary columns into factors:
 ```{r}
-fact_cols = c()
 
-# expand this to loop through all factors in our dataframe
-df = births
-fact_cols=c("hispanic_OSHPD", "black_OSHPD", "asian_OSHPD", "other_race_OSHPD")
+factor_defs = read.csv('~/wildfires/factor_defs.csv')
+factor_comps = read.csv('~/wildfires/factor_components.csv')
 
-fact_name = 'race'
-fact_default = 'White'
+fact_cols = factor_defs$factname
 
-df[fact_name]=fact_default
+births_tmp <- births
 
-for(colname in fact_cols)({
-  coldata=df[,colname]
-  df[[fact_name]][which(coldata==1)]=colname
-})
+for (myfact in fact_cols) {
+  fact_default <- filter(factor_defs, factname == myfact)$default
+  
+  births_tmp[myfact] = fact_default
+  
+  components <- filter(factor_comps, factname == myfact)$varname
+  
+  for (colname in components)({
+    coldata=births_tmp[,colname]
+    births_tmp[[myfact]][which(coldata==1)]=colname
+    })
+  
+  mylevels <- c(fact_default, components)
+  mylevels = mylevels[!duplicated(mylevels)]
+  
+  # convert the column to a factor and set the default
+  births_tmp[[myfact]] <- factor(births_tmp[[myfact]], levels = mylevels)
+}
 
-
+births <- births_tmp
 ```
 
 Apply a filter by gestational week: gestational weeks must be known, and <=41; add preterm birth flag
@@ -185,18 +211,80 @@ Note that the `echo = FALSE` parameter was added to the code chunk to prevent pr
 ggsave(timeplt, file = '/Volumes/Padlock/wildfires/timeplot.png')
 ```
 
+Plot: pregnancy duration by conception date
+```{r pregnancy duration by conception}
+
+duration_plt <- births %>% mutate(binary_exposed = case_when(
+  exposure_tri == '' ~ FALSE,
+  TRUE ~ TRUE
+  ))
+
+preg_duration <- ggplot(duration_plt, aes(x = as.Date(start_date), y = gest_weeks, color=binary_exposed)) +
+  geom_point() +
+  theme_bw() +
+  scale_x_date()
+
+
+preg_duration
+```
+
+Histograms comparing exposed to unexposed 
+
+```{r hist binary exposure}
+
+gest_hist <- ggplot(duration_plt, aes(x=gest_weeks) ) +
+  geom_histogram(bins = max(births$gest_weeks) - min(births$gest_weeks)) +
+  theme_bw() +
+  scale_y_log10()
+gest_hist
+
+```
+
+Histogram comparison
+
+```{r histogram comparison}
+compare_plt = duration_plt %>% mutate(unexp_weeks = case_when(binary_exposed == 0 ~gest_weeks)) %>%
+  mutate(exp_weeks = case_when(binary_exposed == 1 ~gest_weeks))
+
+nbins_exp = max(compare_plt$exp_weeks, na.rm=TRUE) - min(compare_plt$exp_weeks, na.rm=TRUE)
+nbins_unexp = max(compare_plt$unexp_weeks, na.rm=TRUE) - min(compare_plt$unexp_weeks, na.rm=TRUE)
+
+compare_hist <-ggplot(compare_plt, aes(x=x) ) +
+  geom_histogram( aes(x = unexp_weeks), fill="#69b3a2", bins=nbins_unexp, alpha = .8 ) +
+  geom_histogram( aes(x = exp_weeks), fill= "#404080", bins=nbins_exp, alpha = .8) +
+  xlab("Pregnancy duration in gestational weeks") +
+  theme_bw()
+
+compare_hist
+
+```
+
+
+
 Simple table
 ```{r}
 library(epitools)
-tst <- epitable(births$exposure_tri, births$preterm)
+tst <- epitable(duration_plt$binary_exposed, duration_plt$preterm)
 
 epitab(tst)
 
 ```
 
-Test a very simple logistic regression model: outcome is preterm birth (binary), input is covariates and binary trimester exposure.
+Slightly less simple table
+```{r trimester table}
+
+tst_tri <- epitable(births$exposure_tri, births$preterm)
+
+epitab(tst_tri)
+
+```
+
+
+Test a very simple logistic regression model: outcome is preterm birth (binary), input is covariates and duration trimester exposure.
 
 ```{r}
-#simple_lgt <- glm(preterm ~ )
+simple_lgt <- glm(preterm ~ race + ipi + edu + insurance + pn_care + bmi + wic + overlap1 + overlap2 + overlap3, data = births)
+
+summary(simple_lgt)
 
 ```
