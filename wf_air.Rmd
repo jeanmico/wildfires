@@ -8,6 +8,7 @@ This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute
 Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
 
 ```{r}
+library(tmap)
 library(ggplot2)
 library(tidyr)
 library(ggmap)
@@ -26,6 +27,7 @@ Constants and globals
 ```{r}
 fname_img <<- paste('/Users/student/wildfires/images/', Sys.Date(), '_', sep = '')
 fname_csv <<- paste('/Users/student/wildfires/output/', Sys.Date(), '_', sep = '')
+testdate <- as.Date('2018-11-15')
 ```
 
 ```{r}
@@ -39,7 +41,6 @@ file_naming <- function(f_name, f_type) {
 }
 
 ```
-
 
 ```{r}
 idw_interpolate <- function(data_sp, interp_col, grid_n, weight_power) {
@@ -55,39 +56,79 @@ idw_interpolate <- function(data_sp, interp_col, grid_n, weight_power) {
   crs(grd) <- proj4string(data_sp)
   
   # interpolate!
-  data_sp_idw <- gstat::idw(!!interp_col ~ 1, data_sp, newdata=grd, idp=weight_power)
+  data_sp_idw <- gstat::idw(data_sp[[interp_col]] ~ 1, data_sp, newdata=grd, idp=weight_power)
+  
+  #file_name = file_naming(fname, 'image')
+  
   return(data_sp_idw)
 }
 ```
 
 ```{r}
-raster_map <- function(idw_sp, legend_show, rast_title, fname) {
-  r <- raster(idw_sp)
+sensor_map <- function(sensor_df) {
+  sensors_pa <- st_as_sf(sensor_df, coords =c("lon", "lat"), crs=4326)
+  sens_plt <- tm_shape(sensors_pa) +
+    tm_dots(col='gray')
+  
+  file_name = file_naming(fname, 'image')
+  tmap_save()
+  
+  return(sens_plt)
+}
+```
+
+```{r}
+raster_map <- function(raster_sp, points_sp, bounding_box, legend_show, rast_title, fname) {
+  r <- raster(raster_sp)
   
   # clip to California
   r_clip <- mask(r, ca_county_map)
   
   # map the interpolated raster
-  rast_plt <- tm_shape(r_clip) +
-    tm_raster(n=10, palette = "YlOrRd", title=rast_title) +
-    tm_shape(idw_sp) + tm_dots(size=.2) +
-    tm_legend(legend.show=FALSE)
+  rast_plt <- tm_shape(r_clip, bbox = bounding_box) +
+    tm_raster(n=12, palette = "YlOrRd", title=rast_title, style='fixed', breaks=c(0,25,50,75,100,125,150,175,200,225,250,300,400)) +
+    tm_shape(points_sp) + tm_dots(size=.2) +
+    tm_legend(legend.outside=TRUE, legend.show=legend_show, legend.text.size=1.2)
   
-  rast_plt
-  
-  
-  
+  file_name = file_naming(fname, 'image')
   tmap_save(rast_plt + tm_layout(outer.margins = c(0,0,0,0)), file=file_name)
+  
+  return(rast_plt)
 }
 ```
 
+```{r}
+line_plot <- function(df, xcol, ycol, line_title, x_label, y_label, fname) {
+  Line_plt <- ggplot(df, aes(x=datesort, y=daily_mean_pm25, color = as.character(site_id), label=county)) +
+    geom_line() +
+    scale_color_brewer(palette="Accent") +
+    xlab(x_label) +
+    ylab(y_label) +
+    labs(color = "Sensor", labels = plot_df$county) +
+    scale_fill_discrete(breaks=plot_df$county)
+  
+  file_name = file_naming(fname, 'image')
+  ggplot.save()
+  
+  return(line_plt)
+}
+
+```
+
+Read in a map of the USA
+```{r}
+county_map = rgdal::readOGR('/Users/student/wildfires/cb_2018_us_county_5m')
+```
+Restrict the map to California
+```{r}
+ca_county_map <- subset(county_map, STATEFP == '06')
+ca_county_map <<- spTransform(ca_county_map, CRS="+proj=longlat +datum=WGS84")
+```
 
 
 # PurpleAir data
 ```{r}
-pa_pm25 = read.csv('~/wildfires/2018_bayarea_pm25_purple.csv')
-pa_pm25 <- pa_pm25 %>% mutate(pm25_atm_corr = .39*mean_pm25_atm + 0.0024*mean_temp - .050*mean_humid,
-                              pm25_1_corr = .39*mean_pm25_atm + 0.0024*mean_temp - .050*mean_humid)
+pa_pm25 = read.csv('~/wildfires/2018_purpleair.csv')
 
 # remove NA (do a better job of trying to fix NA)
 pa_pm25 <- pa_pm25 %>% filter(!is.na(pm25_atm_corr))
@@ -100,9 +141,43 @@ tm_shape(sensors_pa) +
 
 ```{r}
 coord_ref <- CRS("+proj=longlat +datum=WGS84")
-pa_sp <- SpatialPointsDataFrame(coords = pa_pm25[ , c("lon", 'lat')], data = pa_pm25, proj4string=coord_ref)
+purple_oneday <- pa_pm25 %>% filter(as.Date(day_date) == testdate)
+pa_sp <- SpatialPointsDataFrame(coords = purple_oneday[ , c("lon", 'lat')], data = purple_oneday, proj4string=coord_ref)
 ```
 
+Create an IDW interpolation of the PurpleAir data for Nov 15, 2018
+```{r}
+purple_idw <- idw_interpolate(pa_sp, 'pm25_atm_corr', 50000, 3)
+
+purple_rast <- raster_map(purple_idw, pa_sp, pa_sp, TRUE, 'PurpleAir, corrected', 'purpleair_atm_corr_idw')
+
+purple_rast
+```
+
+```{r}
+purple_raw_idw <- idw_interpolate(pa_sp, 'mean_pm25_atm', 50000, 3)
+
+purple_raw_rast <- raster_map(purple_raw_idw, pa_sp, pa_sp, TRUE, 'PurpleAir, raw', 'purpleair_atm_raw_idw')
+
+purple_raw_rast
+```
+
+Plot the PurpleAir raw v PurpleAir corrected
+
+```{r}
+purple_corr_plt <- ggplot(pa_pm25, aes(x = mean_pm25_atm, y = pm25_atm_corr))+
+  geom_point() +
+  geom_abline(slope=1, intercept=0) +
+  xlab('Raw PurpleAir PM2.5') +
+  ylab('Corrected PurpleAir PM2.5') + 
+  xlim(c(0,400)) + 
+  ylim(c(0,400)) +
+  coord_fixed()
+
+purple_corr_plt
+
+ggsave(purple_corr_plt, file=file_naming('PA_corrected_v_raw_atm', 'image'))
+```
 
 
 Read in the PM2.5 EPA data for 2018 (all of California)
@@ -172,13 +247,20 @@ Testing out interpolation for a single day's readings
 ```{r}
 day = as.Date('2018-11-15')
 day_df <- ca_pm25 %>% filter(datesort == day)
+#day_df <- day_df %>% filter(county_code %in% c(1, 13, 41, 75, 81, 85)) # restrict to sensors in the 6 bay area counties
 coord_ref <- CRS("+proj=longlat +datum=WGS84")
 day_sp <- SpatialPointsDataFrame(coords = day_df[ , c("longitude", 'latitude')], data = day_df, proj4string=coord_ref)
 ```
 
+```{r}
+epa_idw <- idw_interpolate(day_sp, 'daily_mean_pm25', 500000, 3)
+
+epa_rast <- raster_map(epa_idw, day_sp, pa_sp, TRUE, 'PM2.5', 'epa_idw')
+
+epa_rast
+```
 IDW
 ```{r}
-
 
 # create empty grid
 grd <- as.data.frame(spsample(day_sp, 'regular', n=500000))
@@ -195,15 +277,7 @@ crs(grd) <- proj4string(day_sp)
 day_sp.idw <- gstat::idw(daily_mean_pm25 ~ 1, day_sp, newdata=grd, idp=4.0)
 
 ```
-Read in a map of the USA
-```{r}
-county_map = rgdal::readOGR('/Users/student/wildfires/cb_2018_us_county_5m')
-```
-Restrict the map to California
-```{r}
-ca_county_map <- subset(county_map, STATEFP == '06')
-ca_county_map <- spTransform(ca_county_map, CRS="+proj=longlat +datum=WGS84")
-```
+
 
 
 ```{r}

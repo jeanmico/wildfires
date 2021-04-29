@@ -96,30 +96,6 @@ Narrow in our analysis to the sensors with a correlation > 90%.
 
 First, we'll aggregate the data to 1-hour and daily time periods. The daily data is what we'll use for our later analysis, but the hourly data gives us a better look at the data quality.
 
-```{r read_data}
-library(readr)
-
-ids_list = unique(qc90$deviceDeploymentID)
-
-#TODO: read in files, use Mazama package to hourly or daily average, print smaller dataframe to speed this up!
-# cannot read in saved files and convert to pat object
-# see: https://github.com/MazamaScience/AirSensor/issues/260
-
-for (i in 1:length(ids_list)) {
-  fpath = '/Volumes/Padlock/purple_mz/'
-  fname_data = paste(fpath, ids_list[[i]], '_data.csv', sep='')
-  fname_meta = paste(fpath, ids_list[[i]], '_meta.csv', sep='') 
-  
-  tmp_data = read_csv(fname_data)
-  tmp_meta = read_csv(fname_meta)
-  
-  pat_isPat(tmp_pat)
-  
-  # create a pat object
-  
-}
-```
-
 ```{r filepaths}
 
 # download the PurpleAir data for the good ids
@@ -140,8 +116,8 @@ fpath_stdev = '/Volumes/Padlock/purple18_stdev/'
 fname_qc = '/Volumes/Padlock/purple18_addlqc/humid_temp.csv'
 ```
 
-```{r averaging data}
-
+```{r aggregating data}
+ids_list = unique(qc90$deviceDeploymentID)
 for (i in 1:length(ids_list)) {
   
   fname = paste(ids_list[[i]], '.csv', sep='')
@@ -209,12 +185,16 @@ Read in additional qc data and merge with existing qc dataframe
 qc_addl = read.csv(fname_qc)
 
 qc90 <- merge(qc90, qc_addl, by = 'deviceDeploymentID')
+
+write.csv(qc90, file = '~/wildfires/good_ids_from_mazama.csv')
 ```
 
 Histogram of humidity and temperature anticorrelation:
 ```{r temp_humidity}
 temp_humid_hist <- ggplot(qc90, aes(x=ht_correlation)) +
-  geom_histogram()
+  geom_histogram() + 
+  theme_minimal()
+
 
 temp_humid_hist
 ```
@@ -225,22 +205,25 @@ library(readr)
 
 ids_list = unique(qc90$deviceDeploymentID)
 
-df_hour = data.frame(matrix(ncol=19, nrow=0))
-df_day = data.frame(matrix(ncol=19, nrow=0))
-df_stdev = data.frame(matrix(ncol=19, nrow=0))
+df_hour = data.frame(matrix(ncol=20, nrow=0))
+df_day = data.frame(matrix(ncol=20, nrow=0))
+df_stdev = data.frame(matrix(ncol=20, nrow=0))
 
-agg_cols = c("datetime","pm25_A","pm25_B","temperature","humidity","pressure","pm1_atm_A","pm25_atm_A","pm10_atm_A","pm1_atm_B","pm25_atm_B","pm10_atm_B","uptime","rssi","memory","adc0","bsec_iaq","datetime_A","datetime_B")
+agg_cols = c("datetime","pm25_A","pm25_B","temperature","humidity","pressure","pm1_atm_A","pm25_atm_A","pm10_atm_A","pm1_atm_B","pm25_atm_B","pm10_atm_B","uptime","rssi","memory","adc0","bsec_iaq","datetime_A","datetime_B", "deviceDeploymentID")
 
 for (i in c('hour', 'day', 'stdev')) {
   fpath = eval(as.name(paste('fpath', i, sep='_'))) #nonstandard evaluation to choose name of file and dataframe
   
-  outdf = data.frame(matrix(ncol=19, nrow=0))
+  outdf = data.frame(matrix(ncol=20, nrow=0))
   colnames(outdf) = agg_cols
+  
   outname = paste('df', i, sep='_')
 
   for (j in 1:length(ids_list)) {
     fname = paste(fpath, ids_list[[j]], '.csv', sep = '')
     tmpdf = read.csv(fname)
+    
+    tmpdf <- tmpdf %>% mutate(deviceDeploymentID = ids_list[[j]])
     
     outdf = rbind(outdf, tmpdf)
   }
@@ -258,12 +241,37 @@ Check coverage of sensors with a correlation >90% (how many readings do we have 
 
 ```{r check_coverage}
 coverage_hist <- ggplot(df_day, aes(x=datetime)) +
-  geom_bar()
+  geom_bar() + 
+  xlab('Day') + 
+  scale_x_discrete(guide = guide_axis(angle = 90)) + 
+  theme_minimal()
+
 
 coverage_hist
 ```
+```{r one_sensor_stdev}
 
-Check that temperature and humidity are anticorrelated
+mini_stdev = df_stdev %>% filter(deviceDeploymentID == ids_list[[1]])
+
+ministd_hist <- ggplot(mini_stdev, aes(x=pm25_A)) + 
+  geom_histogram() + 
+  theme_minimal()
+
+
+ministd_hist
+
+```
+
+```{r one_sensor_stdev_b}
+
+ministd_histb <- ggplot(mini_stdev, aes(x=pm25_B)) + 
+  geom_histogram() + 
+  theme_minimal()
+
+
+ministd_histb
+
+```
 
 How many repeats and outliers are acceptable?
 

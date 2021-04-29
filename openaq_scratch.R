@@ -2,6 +2,7 @@
 library(dplyr)
 library(tidyr)
 library(ggplot2)
+library(tidyverse)
 oaq_sf_raw = read.csv('~/wildfires/openAQ/openaq_sf_area.csv')
 oaq_sf = oaq_sf_raw %>% filter(location == "San Francisco")
 
@@ -48,3 +49,33 @@ colnames(fulldata) = c("State_Code", "County_Code", "Site_Num", "Parameter_Code"
                        "Sample_Measurement", "Units_of_Measure", "MDL", 
                        "Uncertainty", "Qualifier", "Method_Type", "Method_Code", "Method_Name", 
                        "State_Name", "County_Name", "Date_of_Last_Change")
+
+# restrict to Oct 1 - Dec 31
+hourly_pm25 = fulldata %>% filter(as.Date(Date_Local) >= as.Date('2018-10-01'))
+
+#site numbers are unique WITHIN the county
+
+# counties to exclude
+exclude_counties = read.csv('~/wildfires/exclude_county_sensors.csv')
+exclude_counties
+
+hourly_pm25 <- hourly_pm25 %>% filter(!(County_Code %in% exclude_counties$code))
+hourly_sensors = hourly_pm25 %>% distinct(County_Code, Site_Num, Latitude, Longitude)
+write.csv(hourly_sensors, file='~/wildfires/hourly_sensors.csv', row.names = FALSE)  
+
+
+# create a date-time column
+hourly_pm25 <- hourly_pm25 %>% unite(datetime, Date_Local, Time_Local, sep=' ', remove = FALSE) %>%
+  mutate(datetime = as.POSIXct(datetime))
+
+# create a unique location ID
+#  two digit county code
+#  4 digit site code
+hourly_pm25 <- hourly_pm25 %>% mutate(location = paste(str_pad(County_Code, 2, side='left', pad = '0'), 
+                                                       str_pad(Site_Num, 4, side = 'left', pad = '0'), sep=''))
+
+
+# quick plot of November's data - messy
+plt = ggplot(hourly_pm25, aes(y = Sample_Measurement, x = datetime, colour = location)) +
+  geom_line()
+plt

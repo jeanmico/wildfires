@@ -111,5 +111,6 @@ for (i in 5592:length(ba_unique_ids)) {
     write.csv(cmb$data, file = paste('/Volumes/Padlock/purple_mz/', ba_unique_ids[i], '_data.csv', sep=''))
   }
 }
-write.csv(qc_data, file = '~/wildfires/purple_qc_data_4.csv')
+write.csv(qc_data, file = '~/wildfires/purple_qc_data_5.csv')
 write.csv(good_ids, file = '~/wildfires/purple_good_ids.csv')
+

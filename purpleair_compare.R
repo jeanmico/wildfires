@@ -84,5 +84,4 @@ library(AirSensor)
 library(dplyr)
 library(tidyr)
 
-setArchiveBaseUrl("http://data.mazamascience.com/PurpleAir/v1")
 
