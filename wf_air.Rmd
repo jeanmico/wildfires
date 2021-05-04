@@ -266,18 +266,85 @@ watershed_map <<- spTransform(watershed, CRS="+proj=longlat +datum=WGS84")
 watershed_map
 ca_county_map
 
-#r_clip <- mask(r, ca_county_map)
+water_clip <- crop(watershed_map, ca_county_map) # crop instead of mask here bc the object is not a raster
 
 # map the interpolated raster
-water_plt <- tm_shape(watershed_map, bbox = pa_sp) + tm_polygons() +
+water_plt <- tm_shape(water_clip, bbox = pa_sp) + tm_polygons(col = '#F3DFA2') +
   tm_shape(pa_sp) +
-  tm_dots(col='purple')
+  tm_dots(col='#6E2594', size = .15) + 
+  tm_shape(sensors_sf) + tm_dots(col = '#BB4430', size = .15) +
+  tm_layout(bg.color = '#7EBDC2')
 
 water_plt
 
-file_name = file_naming('eldritch_ca', 'image')
+file_name = file_naming('watershed_sensors', 'image')
 tmap_save(water_plt + tm_layout(outer.margins = c(0,0,0,0)), file=file_name)
 ```
+
+Combine EPA and PurpleAir sensors into one dataframe, assign each a watershed #
+
+```{r}
+# first, make a giant dataframe with all sensors (EPA and Purple) for all days
+
+# get the purplair data
+purpleair_fulldf <- data.frame(matrix(ncol = 8, nrow = 0))
+colnames(purpleair_fulldf) = c("sensor_id", "day_date", "mean_pm25_atm", "mean_pm25_1", "mean_temp", "mean_humid", "pm25_atm_corr", "pm25_1_corr"  )
+
+fpath = '/Volumes/Padlock/purpleair_2018_corr/'
+
+fnames <- list.files(fpath, full.names = TRUE)
+
+for (i in 1:length(fnames)) {
+  tmp <- read.csv(fnames[i])
+  purpleair_fulldf <- rbind(purpleair_fulldf, tmp)
+}
+
+# combine master PurpleAir and EPA
+colnames(sensors_epa)
+
+#add a check to see whether these files have been created before doing this
+sensors_epa <- ca_pm25 %>% dplyr::select(site_id, date,  daily_mean_pm25, latitude, longitude, county_code)
+sensors_epa <- sensors_epa %>% mutate(source = 'epa')
+
+pdict <- read.csv('~/GitHub/wildfires/purpleair_sensors.csv')
+sensors_purple <- merge(purpleair_fulldf, pdict, by.x = 'sensor_id', by.y = 'id', all.y = FALSE)
+sensors_purple <- sensors_purple %>% dplyr::select(sensor_id, day_date, pm25_1_corr, lat, lon)
+
+# get lat and long from purple air
+colnames(sensors_purple) <- c('site_id', 'date',  'daily_mean_pm25', 'latitude', 'longitude')
+sensors_purple <- sensors_purple   %>% mutate(county_code = 0, source = 'purple')
+
+
+
+sensors_full = rbind(sensors_epa, sensors_purple)
+
+
+
+
+
+# assign a watershed
+
+
+
+#what ids are we missing ugh <- still need to deal with this
+
+dids = unique(sensors_purple$sensor_id)
+
+rids = unique(pdict$id)
+
+a = setdiff(dids, rids)
+
+
+
+
+
+```
+
+
+For each day for each watershed, interpolate (default is kriging)
+
+
+
 
 ```{r}
 county_plt <- tm_shape(ca_county_map) + tm_polygons()
