@@ -259,6 +259,37 @@ epa_rast <- raster_map(epa_idw, day_sp, pa_sp, TRUE, 'PM2.5', 'epa_idw')
 
 epa_rast
 ```
+Read in the watershed data to interpolate by watershed.
+```{r}
+watershed = rgdal::readOGR('/Users/student/wildfires/watershed_8')
+watershed_map <<- spTransform(watershed, CRS="+proj=longlat +datum=WGS84")
+watershed_map
+ca_county_map
+
+#r_clip <- mask(r, ca_county_map)
+
+# map the interpolated raster
+water_plt <- tm_shape(watershed_map, bbox = pa_sp) + tm_polygons() +
+  tm_shape(pa_sp) +
+  tm_dots(col='purple')
+
+water_plt
+
+file_name = file_naming('eldritch_ca', 'image')
+tmap_save(water_plt + tm_layout(outer.margins = c(0,0,0,0)), file=file_name)
+```
+
+```{r}
+county_plt <- tm_shape(ca_county_map) + tm_polygons()
+
+county_plt
+
+
+file_name = file_naming('not_eldritch_ca', 'image')
+tmap_save(county_plt + tm_layout(outer.margins = c(0,0,0,0)), file=file_name)
+```
+
+
 IDW
 ```{r}
 
