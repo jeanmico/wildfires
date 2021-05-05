@@ -318,13 +318,29 @@ sensors_purple <- sensors_purple   %>% mutate(county_code = 0, source = 'purple'
 
 sensors_full = rbind(sensors_epa, sensors_purple)
 
+coordinates(sensors_full) <- ~longitude+latitude
+crs(sensors_full) <- CRS("+proj=longlat +datum=NAD83")  # WGS84
+
+sensors_water <- sensors_full
+crs(sensors_water) <- proj4string(CRS("+proj=longlat +datum=NAD83"))
+
+#proj4string(day_sp)
+#crs(grd) <- proj4string(day_sp)
 
 
-
+sensors_water_wgs <- over(sensors_full, watershed[, "OBJECTID"])
+sensors_water_nad <- over(sensors_water, watershed[, "OBJECTID"])
 
 # assign a watershed
 
+sensors_full$watershed_w = sensors_water_wgs$OBJECTID
 
+sensors_full$watershed_n = sensors_water_nad$OBJECTID
+
+
+table(sensors_full$watershed_n)
+
+table(sensors_full$watershed_n) == table(sensors_full$watershed_w)
 
 #what ids are we missing ugh <- still need to deal with this
 
@@ -335,15 +351,83 @@ rids = unique(pdict$id)
 a = setdiff(dids, rids)
 
 
-
-
-
 ```
 
 
 For each day for each watershed, interpolate (default is kriging)
+```{r}
+library(lubridate)
+
+startdate = as.Date('2018-11-01')
+enddate = as.Date('2018-11-30')
+
+datelist = seq(startdate, enddate, by='days')
+
+rast_basename = '/Volumes/Padlock/wildfires/rasts/'
 
 
+
+
+for (i in 1:length(datelist)) {
+  tmpsensors = subset(sensors_full, as.Date(date, '%m/%d/%Y') == datelist[i])
+  tmprast = idw_interpolate(tmpsensors , 'daily_mean_pm25', 500000, 3)
+  
+  print(i)
+  print(range(tmpsensors$daily_mean_pm25))
+  
+  rastname = paste(rast_basename, i, '.grd', sep = '_')
+  writeRaster(raster(tmprast), filename = rastname)
+}
+#idw_interpolate <- function(data_sp, interp_col, grid_n, weight_power) {
+qtst <- idw_interpolate(tmpsensors , 'daily_mean_pm25', 500000, 3)
+
+```
+```{r}
+rast_basename = '/Volumes/Padlock/wildfires/rast_water/'
+watersheds = unique(sensors_full$watershed_n)
+
+
+for (i in 1:length(datelist)) {
+  for (j in 1:length(watersheds)) {
+    tmpsensors = subset(sensors_full, as.Date(date, '%m/%d/%Y') == datelist[i])
+    tmpsensors = subset(tmpsensors, watershed_n == watersheds[j])
+    tmprast = idw_interpolate(tmpsensors , 'daily_mean_pm25', 500000, 3)
+    
+    print(i)
+    print(range(tmpsensors$daily_mean_pm25))
+    
+    rastname = paste(rast_basename, i, watersheds[j], '.grd', sep = '_')
+    writeRaster(raster(tmprast), filename = rastname)
+  }
+}
+#idw_interpolate <- function(data_sp, interp_col, grid_n, weight_power) {
+qtst <- idw_interpolate(tmpsensors , 'daily_mean_pm25', 500000, 3)
+```
+
+
+
+
+```{r}
+
+r <- raster(qtst)
+
+# clip to California
+r_clip <- mask(r, ca_county_map)
+
+# map the interpolated raster
+rast_plt <- tm_shape(r_clip, bbox = pa_sp) +
+  tm_raster(n=12, palette = "YlOrRd", title='', style='fixed', breaks=c(0,25,50,75,100,125,150,175,200,225,250,300,400)) 
+  #tm_shape(points_sp) + tm_dots(size=.2) +
+  #tm_legend(legend.outside=TRUE, legend.show=legend_show, legend.text.size=1.2)
+
+rast_plt
+
+
+test_rast <- raster_map(qtst, pa_sp, pa_sp, TRUE, 'test, corrected', 'test_idw')
+
+test_rast
+
+```
 
 
 ```{r}
