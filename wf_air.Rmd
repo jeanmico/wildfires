@@ -375,15 +375,17 @@ for (i in 1:length(datelist)) {
   print(i)
   print(range(tmpsensors$daily_mean_pm25))
   
-  rastname = paste(rast_basename, i, '.grd', sep = '_')
-  writeRaster(raster(tmprast), filename = rastname)
+  raster_map(tmprast, pa_sp, pa_sp, TRUE, datelist[i], i)
+  
+  #rastname = paste(rast_basename, i, '.grd', sep = '_')
+  #writeRaster(raster(tmprast), filename = rastname)
 }
 #idw_interpolate <- function(data_sp, interp_col, grid_n, weight_power) {
 qtst <- idw_interpolate(tmpsensors , 'daily_mean_pm25', 500000, 3)
 
 ```
 ```{r}
-rast_basename = '/Volumes/Padlock/wildfires/rast_water/'
+rast_basename = '/Volumes/Padlock/wildfires/rast_watershed/'
 watersheds = unique(sensors_full$watershed_n)
 
 
@@ -396,6 +398,8 @@ for (i in 1:length(datelist)) {
     print(i)
     print(range(tmpsensors$daily_mean_pm25))
     
+    
+    
     rastname = paste(rast_basename, i, watersheds[j], '.grd', sep = '_')
     writeRaster(raster(tmprast), filename = rastname)
   }
@@ -404,7 +408,17 @@ for (i in 1:length(datelist)) {
 qtst <- idw_interpolate(tmpsensors , 'daily_mean_pm25', 500000, 3)
 ```
 
+```{r}
 
+fpath = '/Volumes/Padlock/wildfires/rasts'
+
+fnames <- list.files(fpath, full.names = TRUE)
+
+for (i in 1:length(fnames)) {
+  tmp <- read.csv(fnames[i])
+  purpleair_fulldf <- rbind(purpleair_fulldf, tmp)
+}
+```
 
 
 ```{r}
