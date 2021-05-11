@@ -7,6 +7,7 @@ This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute
 
 Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
 
+Libraries
 ```{r}
 library(tmap)
 library(ggplot2)
@@ -25,11 +26,17 @@ library(sf)
 
 Constants and globals
 ```{r}
+
+# file naming conventions
 fname_img <<- paste('/Users/student/wildfires/images/', Sys.Date(), '_', sep = '')
 fname_csv <<- paste('/Users/student/wildfires/output/', Sys.Date(), '_', sep = '')
-testdate <- as.Date('2018-11-15')
+
+# define a bounding box for displaying maps
+bound_box <<-  as(raster::extent( -122.7, -121.55, 37, 38.2), "SpatialPolygons")
+proj4string(bound_box) <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
 ```
 
+Functions
 ```{r}
 file_naming <- function(f_name, f_type) {
   if (f_type == 'image') {
@@ -85,7 +92,7 @@ raster_map <- function(raster_sp, points_sp, bounding_box, legend_show, rast_tit
   r_clip <- mask(r, ca_county_map)
   
   # map the interpolated raster
-  rast_plt <- tm_shape(r_clip, bbox = bounding_box) +
+  rast_plt <- tm_shape(r_clip, bbox = bound_box) +
     tm_raster(n=12, palette = "YlOrRd", title=rast_title, style='fixed', breaks=c(0,25,50,75,100,125,150,175,200,225,250,300,400)) +
     tm_shape(points_sp) + tm_dots(size=.2) +
     tm_legend(legend.outside=TRUE, legend.show=legend_show, legend.text.size=1.2)
@@ -115,12 +122,14 @@ line_plot <- function(df, xcol, ycol, line_title, x_label, y_label, fname) {
 
 ```
 
-Read in a map of the USA
+# Start of code
+
+Get a California county map
 ```{r}
+# USA county map
 county_map = rgdal::readOGR('/Users/student/wildfires/cb_2018_us_county_5m')
-```
-Restrict the map to California
-```{r}
+
+# Restrict to California
 ca_county_map <- subset(county_map, STATEFP == '06')
 ca_county_map <<- spTransform(ca_county_map, CRS="+proj=longlat +datum=WGS84")
 ```
@@ -139,65 +148,22 @@ tm_shape(sensors_pa) +
   tm_dots(col='gray')
 ```
 
-```{r}
-coord_ref <- CRS("+proj=longlat +datum=WGS84")
-purple_oneday <- pa_pm25 %>% filter(as.Date(day_date) == testdate)
-pa_sp <- SpatialPointsDataFrame(coords = purple_oneday[ , c("lon", 'lat')], data = purple_oneday, proj4string=coord_ref)
-```
 
-Create an IDW interpolation of the PurpleAir data for Nov 15, 2018
-```{r}
-purple_idw <- idw_interpolate(pa_sp, 'pm25_atm_corr', 50000, 3)
 
-purple_rast <- raster_map(purple_idw, pa_sp, pa_sp, TRUE, 'PurpleAir, corrected', 'purpleair_atm_corr_idw')
 
-purple_rast
-```
 
-```{r}
-purple_raw_idw <- idw_interpolate(pa_sp, 'mean_pm25_atm', 50000, 3)
-
-purple_raw_rast <- raster_map(purple_raw_idw, pa_sp, pa_sp, TRUE, 'PurpleAir, raw', 'purpleair_atm_raw_idw')
-
-purple_raw_rast
-```
-
-Plot the PurpleAir raw v PurpleAir corrected
-
-```{r}
-purple_corr_plt <- ggplot(pa_pm25, aes(x = mean_pm25_atm, y = pm25_atm_corr))+
-  geom_point() +
-  geom_abline(slope=1, intercept=0) +
-  xlab('Raw PurpleAir PM2.5') +
-  ylab('Corrected PurpleAir PM2.5') + 
-  xlim(c(0,400)) + 
-  ylim(c(0,400)) +
-  coord_fixed()
-
-purple_corr_plt
-
-ggsave(purple_corr_plt, file=file_naming('PA_corrected_v_raw_atm', 'image'))
-```
 
 
 Read in the PM2.5 EPA data for 2018 (all of California)
-```{r}
+```{r EPA data read}
 ca_pm25 = read.csv('~/wildfires/2018_CA_PM25_EPA.csv')
-```
 
-Rename columns for convenience
-```{r}
+# Rename columns for convenience
 colnames(ca_pm25) = c('date', 'source', 'site_id', 'poc', 'daily_mean_pm25', 'units', 'daily_aqi_value', 'site_name', 'daily_obs_count', 'percent_complete', 'aqs_parameter_code', 'aqs_parameter_desc', 'cbsa_code', 'cbsa_name', 'state_code', 'state', 'county_code', 'county', 'latitude', 'longitude')
-```
 
-Sort by date
-```{r}
+# Sort by date
 ca_pm25 <- ca_pm25 %>% mutate(datesort = as.Date(date, format='%m/%d/%Y'))
-```
 
-
-Explore the EPA data
-```{r}
 # filter out the counties we don't want
 exclude_counties = read.csv('~/wildfires/exclude_county_sensors.csv')
 
@@ -205,30 +171,12 @@ ca_pm25 <- ca_pm25 %>% filter(!(county_code %in% exclude_counties$code))
 
 epa_ids = unique(ca_pm25$site_id)
 ```
-How many EPA sensors do we have?
-```{r}
-print(length(epa_ids))
-```
-Select 5 sensors randomly and plot their data for the year
-```{r}
-plot_ids = sample(epa_ids, size=5)
-plot_df = ca_pm25 %>% filter(site_id %in% plot_ids)
 
-# sort by date
-
-ggplot(plot_df, aes(x=datesort, y=daily_mean_pm25, color = as.character(site_id), label=county)) +
-  geom_line() +
-  scale_color_brewer(palette="Accent") +
-  xlab("Date") +
-  ylab("Mean PM 2.5 concentration (\u03bcg/m\u00b3)") +
-  labs(color = "Sensor", labels = plot_df$county) +
-  scale_fill_discrete(breaks=plot_df$county)
-  
-```
 # Geographic analysis
 
 Get a dataframe of just the sensors with latitude and longitude
 ```{r}
+# this serves as a reference file for the EPA sensors
 sensors_epa = ca_pm25 %>% distinct(site_id, .keep_all=TRUE) %>% dplyr::select(site_id, site_name, cbsa_code, cbsa_name, state_code, state, county_code, county, latitude, longitude)
 ```
 
@@ -244,21 +192,7 @@ tm_shape(sensors_sf) +
 ```
 
 Testing out interpolation for a single day's readings
-```{r}
-day = as.Date('2018-11-15')
-day_df <- ca_pm25 %>% filter(datesort == day)
-#day_df <- day_df %>% filter(county_code %in% c(1, 13, 41, 75, 81, 85)) # restrict to sensors in the 6 bay area counties
-coord_ref <- CRS("+proj=longlat +datum=WGS84")
-day_sp <- SpatialPointsDataFrame(coords = day_df[ , c("longitude", 'latitude')], data = day_df, proj4string=coord_ref)
-```
 
-```{r}
-epa_idw <- idw_interpolate(day_sp, 'daily_mean_pm25', 500000, 3)
-
-epa_rast <- raster_map(epa_idw, day_sp, pa_sp, TRUE, 'PM2.5', 'epa_idw')
-
-epa_rast
-```
 Read in the watershed data to interpolate by watershed.
 ```{r}
 watershed = rgdal::readOGR('/Users/student/wildfires/watershed_8')
@@ -319,17 +253,17 @@ sensors_purple <- sensors_purple   %>% mutate(county_code = 0, source = 'purple'
 sensors_full = rbind(sensors_epa, sensors_purple)
 
 coordinates(sensors_full) <- ~longitude+latitude
-crs(sensors_full) <- CRS("+proj=longlat +datum=NAD83")  # WGS84
+crs(sensors_full) <- CRS( "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")  # WGS84
 
 sensors_water <- sensors_full
-crs(sensors_water) <- proj4string(CRS("+proj=longlat +datum=NAD83"))
+crs(sensors_water) <- proj4string(CRS( "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"))
 
 #proj4string(day_sp)
 #crs(grd) <- proj4string(day_sp)
-
+crs(watershed) <- CRS( "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
 
 sensors_water_wgs <- over(sensors_full, watershed[, "OBJECTID"])
-sensors_water_nad <- over(sensors_water, watershed[, "OBJECTID"])
+#sensors_water_nad <- over(sensors_water, watershed[, "OBJECTID"])
 
 # assign a watershed
 
@@ -338,13 +272,13 @@ sensors_full$watershed_w = sensors_water_wgs$OBJECTID
 sensors_full$watershed_n = sensors_water_nad$OBJECTID
 
 
-table(sensors_full$watershed_n)
+table(sensors_full$watershed_w)
 
 table(sensors_full$watershed_n) == table(sensors_full$watershed_w)
 
 #what ids are we missing ugh <- still need to deal with this
 
-dids = unique(sensors_purple$sensor_id)
+dids = unique(sensors_purple$site_id)
 
 rids = unique(pdict$id)
 
@@ -353,8 +287,56 @@ a = setdiff(dids, rids)
 
 ```
 
+Merge some of your watersheds
+```{r merge watersheds}
 
-For each day for each watershed, interpolate (default is kriging)
+
+```
+
+Write a kriging method (once complete, make it a function above and delete this chunk)
+
+```{r kriging variogram}
+# this chunk should be turned into a function above and then deleted
+
+# define the 1st order polynomial equation
+kv <- as.formula(daily_mean_pm25 ~ latitude + longitude)
+
+# filter to a single date
+sensors_tmpday <- subset(sensors_full, as.Date(date, '%m/%d/%Y') == as.Date('2018-11-15'))
+
+# compute the sample variogram
+var_krig <- variogram(kv, sensors_tmpday)
+
+# make a plot to assess the fit
+var_fit <- fit.variogram(var_krig, fit.ranges = FALSE, fit.sills = FALSE, 
+                         vgm(psill=14, model="Sph", range=590000, nugget=0))
+
+plot(var_krig, var_fit)
+
+```
+
+```{r kriging}
+# this chunk should be turned into a function above and then deleted
+
+# define the trend model
+
+# perform the krige interpolation
+
+
+# convert kriged surface to raster object for clipping
+
+# plot the raster map
+
+```
+
+```{r kriging variance and confidence maps}
+# this chunk should be turned into a function above and then deleted
+
+
+
+```
+
+For each day for each watershed, interpolate
 ```{r}
 library(lubridate)
 
@@ -408,17 +390,6 @@ for (i in 1:length(datelist)) {
 qtst <- idw_interpolate(tmpsensors , 'daily_mean_pm25', 500000, 3)
 ```
 
-```{r}
-
-fpath = '/Volumes/Padlock/wildfires/rasts'
-
-fnames <- list.files(fpath, full.names = TRUE)
-
-for (i in 1:length(fnames)) {
-  tmp <- read.csv(fnames[i])
-  purpleair_fulldf <- rbind(purpleair_fulldf, tmp)
-}
-```
 
 
 ```{r}
@@ -429,7 +400,7 @@ r <- raster(qtst)
 r_clip <- mask(r, ca_county_map)
 
 # map the interpolated raster
-rast_plt <- tm_shape(r_clip, bbox = pa_sp) +
+rast_plt <- tm_shape(r_clip, bbox = bound_box) +
   tm_raster(n=12, palette = "YlOrRd", title='', style='fixed', breaks=c(0,25,50,75,100,125,150,175,200,225,250,300,400)) 
   #tm_shape(points_sp) + tm_dots(size=.2) +
   #tm_legend(legend.outside=TRUE, legend.show=legend_show, legend.text.size=1.2)
@@ -455,25 +426,6 @@ tmap_save(county_plt + tm_layout(outer.margins = c(0,0,0,0)), file=file_name)
 ```
 
 
-IDW
-```{r}
-
-# create empty grid
-grd <- as.data.frame(spsample(day_sp, 'regular', n=500000))
-names(grd) <- c("longitude", "latitude")
-coordinates(grd) <- c('longitude', 'latitude')
-gridded(grd) <- TRUE
-fullgrid(grd) <- TRUE
-
-# add projection to empty grid
-proj4string(day_sp)
-crs(grd) <- proj4string(day_sp)
-
-# interpolate!
-day_sp.idw <- gstat::idw(daily_mean_pm25 ~ 1, day_sp, newdata=grd, idp=4.0)
-
-```
-
 
 
 ```{r}
@@ -494,7 +446,7 @@ tmap_save(epaplt_full, file='/Users/student/wildfires/20181115_epa_full.png',  o
 ```
 
 ```{r}
-epaplt <- tm_shape(r_clip, bbox = pa_sp) +
+epaplt <- tm_shape(r_clip, bbox = bound_box) +
   tm_raster(n=10, palette = "YlOrRd", title="") +
   tm_shape(day_sp) + tm_dots(size=.2) +
   tm_legend(legend.outside=TRUE, legend.text.size=1.2)
@@ -503,85 +455,6 @@ epaplt
 
 tmap_save(epaplt + tm_layout(outer.margins = c(0,0,0,0)), file='/Users/student/wildfires/20181115_epa.png',  outer.margins = c(0,0,0,0))
 
-```
-
-
-
-Interpolate the uncorrected purpleair data
-```{r}
-
-
-# create empty grid
-grd <- as.data.frame(spsample(pa_sp, 'regular', n=50000))
-names(grd) <- c("longitude", "latitude")
-coordinates(grd) <- c('longitude', 'latitude')
-gridded(grd) <- TRUE
-fullgrid(grd) <- TRUE
-
-# add projection to empty grid
-proj4string(pa_sp)
-crs(grd) <- proj4string(pa_sp)
-
-# interpolate!
-pa_sp.idw <- gstat::idw(mean_pm25_atm ~ 1, pa_sp, newdata=grd, idp=4.0)
-
-```
-
-
-```{r}
-r <- raster(pa_sp.idw)
-
-# clip to California
-r_clip <- mask(r, ca_county_map)
-
-# map the interpolated raster
-paplt <- tm_shape(r_clip) +
-  tm_raster(n=10, palette = "YlOrRd", title="Interpolated PM2.5") +
-  tm_shape(pa_sp) + tm_dots(size=.2) +
-  tm_legend(legend.show=FALSE)
-
-paplt
-
-tmap_save(paplt + tm_layout(outer.margins = c(0,0,0,0)), file='/Users/student/wildfires/20181115_purpleair.png')
-```
-
-Interpolate the corrected purpleair data
-```{r}
-
-
-# create empty grid
-grd <- as.data.frame(spsample(pa_sp, 'regular', n=50000))
-names(grd) <- c("longitude", "latitude")
-coordinates(grd) <- c('longitude', 'latitude')
-gridded(grd) <- TRUE
-fullgrid(grd) <- TRUE
-
-# add projection to empty grid
-proj4string(pa_sp)
-crs(grd) <- proj4string(pa_sp)
-
-# interpolate!
-pa_sp.idw <- gstat::idw(pm25_atm_corr ~ 1, pa_sp, newdata=grd, idp=4.0)
-
-```
-
-
-```{r}
-r <- raster(pa_sp.idw)
-
-# clip to California
-r_clip <- mask(r, ca_county_map)
-
-# map the interpolated raster
-papltc <- tm_shape(r_clip) +
-  tm_raster(n=10, palette = "YlOrRd", title="Interpolated PM2.5") +
-  tm_shape(pa_sp) + tm_dots(size=.2) +
-  tm_legend(legend.show=FALSE)
-  #tm_legend(legend.text.size=1.2, legend.outside=TRUE)
-
-papltc
-
-tmap_save(papltc + tm_layout(outer.margins = c(0,0,0,0)), file='/Users/student/wildfires/20181115_purpleair_corr.png')
 ```
 
 
