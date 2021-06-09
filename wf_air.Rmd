@@ -203,9 +203,9 @@ ca_county_map
 water_clip <- crop(watershed_map, ca_county_map) # crop instead of mask here bc the object is not a raster
 
 # map the interpolated raster
-water_plt <- tm_shape(water_clip, bbox = pa_sp) + tm_polygons(col = '#F3DFA2') +
-  tm_shape(pa_sp) +
-  tm_dots(col='#6E2594', size = .15) + 
+water_plt <- tm_shape(water_clip, bbox = bound_box) + tm_polygons(col = '#F3DFA2') +
+  #tm_shape(pa_sp) +
+  #tm_dots(col='#6E2594', size = .15) + 
   tm_shape(sensors_sf) + tm_dots(col = '#BB4430', size = .15) +
   tm_layout(bg.color = '#7EBDC2')
 
@@ -238,7 +238,7 @@ colnames(sensors_epa)
 
 #add a check to see whether these files have been created before doing this
 sensors_epa <- ca_pm25 %>% dplyr::select(site_id, date,  daily_mean_pm25, latitude, longitude, county_code)
-sensors_epa <- sensors_epa %>% mutate(source = 'epa')
+sensors_epa <- sensors_epa %>% mutate(date = as.Date(date, '%m/%d/%Y'), source = 'epa')
 
 pdict <- read.csv('~/GitHub/wildfires/purpleair_sensors.csv')
 sensors_purple <- merge(purpleair_fulldf, pdict, by.x = 'sensor_id', by.y = 'id', all.y = FALSE)
@@ -269,21 +269,22 @@ sensors_water_wgs <- over(sensors_full, watershed[, "OBJECTID"])
 
 sensors_full$watershed_w = sensors_water_wgs$OBJECTID
 
-sensors_full$watershed_n = sensors_water_nad$OBJECTID
+#sensors_full$watershed_n = sensors_water_nad$OBJECTID
 
 
-table(sensors_full$watershed_w)
+#table(sensors_full$watershed_w)
 
-table(sensors_full$watershed_n) == table(sensors_full$watershed_w)
+#table(sensors_full$watershed_n) == table(sensors_full$watershed_w)
 
 #what ids are we missing ugh <- still need to deal with this
 
-dids = unique(sensors_purple$site_id)
+#dids = unique(sensors_purple$site_id)
 
-rids = unique(pdict$id)
+#rids = unique(pdict$id)
 
-a = setdiff(dids, rids)
+#a = setdiff(dids, rids)
 
+#sensors_full should be a spatialpointsdataframe...why isn't it?
 
 ```
 
@@ -303,6 +304,10 @@ kv <- as.formula(daily_mean_pm25 ~ latitude + longitude)
 
 # filter to a single date
 sensors_tmpday <- subset(sensors_full, as.Date(date, '%m/%d/%Y') == as.Date('2018-11-15'))
+sensors_tmpday <- subset(sensors_tmpday, !(site_id %in% pa_remove15$id))
+crs(sensors_tmpday) = CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
+
+sensors_tmpday <- subset(sensors_tmpday, !is.na(daily_mean_pm25))
 
 # compute the sample variogram
 var_krig <- variogram(kv, sensors_tmpday)
@@ -321,18 +326,52 @@ plot(var_krig, var_fit)
 # define the trend model
 
 # perform the krige interpolation
+grd <- as.data.frame(spsample(sensors_tmpday, 'regular', n=500000))
+
+names(grd) <- c("longitude", "latitude")
+coordinates(grd) <- c('longitude', 'latitude')
+gridded(grd) <- TRUE
+fullgrid(grd) <- TRUE
+
+# add projection to empty grid
+#proj4string(data_sp)
+crs(grd) <- CRS( "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
+
+sensors_tmpday <- sensors_tmpday[-zerodist(sensors_tmpday)[,1],]
+writeOGR(obj=sensors_tmpday, layer = 'sensors_tmpday_removed', dsn='/Users/student/wildfires/', driver = "ESRI Shapefile")
+
+dat_krig <- krige(kv, sensors_tmpday, grd, model=var_fit)
+
+# troubleshooting kriging problems
+#sp::zerodist(sensors_tmpday) # rows with identical locations ex: site_id 60070008 (row 7,8)
+
+# to View the dataframes: View(sensors_tmpday@data)
+
+#
 
 
 # convert kriged surface to raster object for clipping
-
+rkrig <- raster(dat_krig)
+rk_clip <- mask(rkrig, ca_county_map)
 # plot the raster map
 
+krig_map <- tm_shape(rk_clip) +
+  tm_raster()
+
+krig_map
+#raster_map <- function(raster_sp, points_sp, bounding_box, legend_show, rast_title, fname) {
+krig_map <- raster_map(dat_krig, sensors_full, bound_box,  TRUE, '15-Nov-2018', '20181115_krige')
+
+krig_map
 ```
 
 ```{r kriging variance and confidence maps}
 # this chunk should be turned into a function above and then deleted
 
-
+# 95% confidence interval
+krigci <- sqrt(raster(dat_krig, layer='var1.var')) * 1.96
+krigci_m<-mask(krigci, ca_county_map)
+tm_shape(krigci_m, bbox = bound_box) + tm_raster()
 
 ```
 
@@ -352,6 +391,8 @@ rast_basename = '/Volumes/Padlock/wildfires/rasts/'
 
 for (i in 1:length(datelist)) {
   tmpsensors = subset(sensors_full, as.Date(date, '%m/%d/%Y') == datelist[i])
+  # remove na
+  
   tmprast = idw_interpolate(tmpsensors , 'daily_mean_pm25', 500000, 3)
   
   print(i)
