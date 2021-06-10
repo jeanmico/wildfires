@@ -304,7 +304,7 @@ kv <- as.formula(daily_mean_pm25 ~ latitude + longitude)
 
 # filter to a single date
 sensors_tmpday <- subset(sensors_full, as.Date(date, '%m/%d/%Y') == as.Date('2018-11-15'))
-sensors_tmpday <- subset(sensors_tmpday, !(site_id %in% pa_remove15$id))
+#sensors_tmpday <- subset(sensors_tmpday, !(site_id %in% pa_remove15$id))
 crs(sensors_tmpday) = CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
 
 sensors_tmpday <- subset(sensors_tmpday, !is.na(daily_mean_pm25))
@@ -338,7 +338,7 @@ fullgrid(grd) <- TRUE
 crs(grd) <- CRS( "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
 
 sensors_tmpday <- sensors_tmpday[-zerodist(sensors_tmpday)[,1],]
-writeOGR(obj=sensors_tmpday, layer = 'sensors_tmpday_removed', dsn='/Users/student/wildfires/', driver = "ESRI Shapefile")
+writeOGR(obj=sensors_tmpday, layer = 'sensors_tmpday_2', dsn='/Users/student/wildfires/', driver = "ESRI Shapefile")
 
 dat_krig <- krige(kv, sensors_tmpday, grd, model=var_fit)
 
@@ -363,6 +363,8 @@ krig_map
 krig_map <- raster_map(dat_krig, sensors_full, bound_box,  TRUE, '15-Nov-2018', '20181115_krige')
 
 krig_map
+
+tmap_save(krig_map, file = '~/wildfires/krig_all2.png')
 ```
 
 ```{r kriging variance and confidence maps}
