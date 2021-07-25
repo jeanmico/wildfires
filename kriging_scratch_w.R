@@ -1,3 +1,6 @@
+library(gdalUtils)
+library(rgdal)
+
 kriging <- function(day_ord, water, sensors, ca_county, one_watershed) {
   var_krig <- variogram(kv, sensors)
   
@@ -22,12 +25,10 @@ kriging <- function(day_ord, water, sensors, ca_county, one_watershed) {
   crs(grd) <- CRS( "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
   
   print('grid made')
-  
-  #sensors_tmpday1 <- sensors[-zerodist(sensors)[,1],]
-  
+
   #write out sensors shapefile
-  #writeOGR(obj=sensors, layer = file_naming(paste(day_ord, water, 'sensors', sep = '_' ), 'shp'), 
-  #         dsn='/Volumes/', driver = "ESRI Shapefile", overwrite = TRUE)
+  writeOGR(obj=sensors, layer = paste(Sys.Date(), day_ord, water, 'sensors', sep = '_'), 
+         dsn = '/Volumes/Padlock/wildfires/output_geo/', driver = "ESRI Shapefile", overwrite = TRUE)
 
   dat_krig <- krige(kv, sensors, grd, model=var_fit)
   
@@ -40,7 +41,8 @@ kriging <- function(day_ord, water, sensors, ca_county, one_watershed) {
   } else {
     rk_water_clip <- raster::mask(rk_coast_clip, subset(watershed_map, !(OBJECTID %in% waters)))
   }
-  krig_map <- raster_map(rk_water_clip, sensors_full, bound_box,  TRUE, days[day], paste(Sys.Date(), days[day], sep = '_'))  
+  krig_map <- raster_map(rk_water_clip, sensors_full, bound_box,  TRUE, day_ord, paste(Sys.Date(), day_ord, sep = '_'))  
+  writeRaster(rk_water_clip, filename = paste('/Volumes/Padlock/wildfires/rasts_krig_water/', Sys.Date(), day_ord, water,  '.tif', sep = '_'), overwrite = TRUE)
   return(rk_water_clip)
   }
 
@@ -52,17 +54,9 @@ kv <<- as.formula(daily_mean_pm25 ~ latitude + longitude)
 
 days <- seq(as.Date('2018-11-01'), as.Date('2018-11-30'), by='days')
 
-waters <<- c("91", "88", "5", "90", "89", "100", "93", "81")
-
-full_rast <- as.data.frame(spsample(sensors_full, 'regular', n=500000))
-names(full_rast) <- c("longitude", "latitude")
-coordinates(full_rast) <- c('longitude', 'latitude')
-gridded(full_rast) <- TRUE
-fullgrid(full_rast) <- TRUE
-# add projection to empty grid
-crs(full_rast) <- CRS( "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
+waters <<- c( "88", "5", "90", "89")
   
-for (day in 16:16) {
+for (day in 1:30) {
   outrast = paste('/Volumes/Padlock/wildfires/rasts_krig_water/', Sys.Date(), sep = '')
   
   # filter to a single date
@@ -72,59 +66,59 @@ for (day in 16:16) {
   tmp_remove <- pa_remove %>% filter(as.Date(day_date) == as.Date(days[day]))
   print(nrow(tmp_remove))
   sensors_tmpday <- subset(sensors_tmpday, !(site_id %in% tmp_remove$id))
+  sensors_tmpday <- sensors_tmpday[-zerodist(sensors_tmpday)[,1],]
   
   crs(sensors_tmpday) = CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
   
   sensors_tmpday <- subset(sensors_tmpday, !is.na(daily_mean_pm25))
   
-  watersheds_test = unique(sensors_full$watershed_w)
-  water_test = watersheds_test[watersheds_test != "66"]
-  
   for (watershed in waters) {
-    print(paste('water', water))
-    sensors_tmpwater <- subset(sensors_tmpday, watershed_w == water)
+    print(paste('day', day,'water', watershed))
+    sensors_tmpwater <- subset(sensors_tmpday, watershed_w == watershed)
     print(nrow(sensors_tmpwater))
     
     tmp_rast = kriging(day, watershed, sensors_tmpwater, ca_county_map, TRUE)
-    print('returned')
-    
-    
+
   }
   
   sensors_other_watershed = subset(sensors_tmpday, !(watershed_w %in% waters))
   tmp_rast_other = kriging(day, 0, sensors_other_watershed, ca_county_map, FALSE)
-  
-  full_rast = raster::merge(tmp_rast_other, tmp_rast)
-  
-  # map the interpolated raster
-  
-  writeRaster(tmpfull, filename = paste(outrast, days[day],  '.tif', sep = ''), overwrite = TRUE)
-  
-  krig_map <- raster_map(full_rast, sensors_full, bound_box,  TRUE, days[day], paste(Sys.Date(), days[day], sep = '_'))
-  
+
 }
 
+## MERGE ALL WATERSHEDS
+rasts_to_merge = list.files('/Volumes/Padlock/wildfires/rasts_krig_water', pattern = '.tif', full.names = TRUE)
 
-full_test <- extent(bound_box)
-template <- raster(full_test)
-projection(template) <- '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs'
-#writeRaster(template, file="MyBigNastyRasty.tif", format="GTiff")
+mosaic_rasters(gdalfile=rasts_to_merge,dst_dataset="/Volumes/Padlock/wildfires/rasts_krig_water_1.tif",of="GTiff")
+gdalinfo("/Volumes/Padlock/wildfires/rasts_krig_water.tif")
 
-tmp_aligned = projectRaster(from = tmp_rast, to = template)
-tmp_other_aligned = projectRaster(from = tmp_rast_other, to = template)
-
-tmpfull = raster::merge(tmp_aligned, tmp_other_aligned)
-
-krig_map <- raster_map(tmp_rast, sensors_full, bound_box,  TRUE, days[day], paste(Sys.Date(), days[day], sep = '_'))
-
-for (day in 1:length(days)) {
-  sensors_tmpday <- subset(sensors_full, as.Date(date, '%m/%d/%Y') == as.Date(days[day]))
+for (i in 1:1) {
+  tmp_pattern = paste('_2021-07-24_', i, '_', sep = '')
+  tmp_dst = paste("/Volumes/Padlock/wildfires/rasts_krig_water_full/rasts_krig_water_", i, '.tif', sep = '')
   
-  # remove any sensors with bad readings
-  tmp_remove <- pa_remove %>% filter(as.Date(day_date) == as.Date(days[day]))
-  print(nrow(tmp_remove))
-  sensors_tmpday <- subset(sensors_tmpday, !(site_id %in% tmp_remove$id))
-  
-  write.csv(sensors_tmpday, file = paste('/Volumes/Padlock/wildfires/daily_sensor/', Sys.Date(), '_', days[day], '.csv', sep = ''))
+  rasts_to_merge = list.files('/Volumes/Padlock/wildfires/rasts_krig_water', pattern = tmp_pattern, full.names = TRUE)
+  mosaic_rasters(gdalfile=rasts_to_merge, dst_dataset=tmp_dst, of = "GTiff")
 }
 
+# map the rasters for each day
+rastdir = '/Volumes/Padlock/wildfires/rasts_krig_water_full'
+rastfiles = list.files(rastdir, pattern = '.tif', full.names = TRUE)
+for (i in 1:length(rastfiles)) {
+  tmprast = raster(rastfiles[[i]])
+  
+  # extract the number from the file
+  tmpname = strsplit(basename(rastfiles[[i]]), '_')[[1]][4]
+  day = strsplit(tmpname, '\\.')[[1]][1]
+  print(tmpname)
+  print(day)
+  
+  rast_plt <- tm_shape(tmprast) +
+    tm_raster(n=12, palette = "YlOrRd", title=day, style='fixed', breaks=c(0,25,50,75,100,125,150,175,200,225,250,300,400)) +
+    tm_shape(sensors_full) + tm_dots(size=.01) +
+    tm_legend(legend.outside=TRUE, legend.show=TRUE, legend.text.size=1.2)
+  
+  file_name = file_naming(paste('watershed_kriging_map_', day, sep = ''), 'image')
+  tmap_save(rast_plt + tm_layout(outer.margins = c(0,0,0,0)), file=file_name)
+  
+  #raster_map(tmp_rast, sensors_full, bound_box,  TRUE, day, paste(day, 'watershed_kriging_map', sep = '_'))
+}
