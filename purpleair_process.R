@@ -19,8 +19,6 @@ new_cols = c("sensor_id", "day_date", "mean_pm25_atm","mean_pm25_1","mean_temp",
 purpledf = data.frame(matrix(ncol=length(new_cols), nrow=0))
 colnames(purpledf) = new_cols
 for(i in 1:length(fnames)){
-#for(i in 1:1){
-  #print(fnames[i])
   
   sensid = strsplit(basename(fnames[i]), '\\.')[[1]][1]
   print(sensid)
@@ -55,36 +53,12 @@ for(i in 1:length(fnames)){
 
 sensor_loc = read.csv('~/GitHub/wildfires/bay_area_sensors.csv')
 
-# fpath = '/Volumes/Padlock/purpleair_all_corr'
-# 
-# summ_cols = c("sensor_id","day_date","mean_pm25_atm","mean_pm25_1","mean_temp","mean_humid","pm25_atm_corr","pm25_1_corr")
-# 
-# fnames <- list.files(fpath, full.names = TRUE)
-# daydf = data.frame(matrix(ncol=length(summ_cols), nrow=0))
-# 
-# colnames(daydf) = summ_cols
-# myids = vector('list', 2998)
-# for (i in 1:length(fnames)) {
-#   tmp = read.csv(fnames[i])
-#   tmp_id = strsplit(basename(fnames[i]), '\\.')[[1]][1]
-#   tmp <- tmp %>% mutate(id = tmp_id)
-#   myids[[i]] <- tmp_id
-#   daydf <- rbind(daydf, tmp)
-# }
-
-# # correction - fix
-# daydf <- daydf %>% mutate(pm25_atm_corr = .524*mean_pm25_atm - 0.0852*mean_humid + 5.72,
-#                           pm25_1_corr = .524*mean_pm25_1 - 0.0852*mean_humid + 5.72)
-
 sensor_loc <- sensor_loc %>% dplyr::select(id, lat, lon, name, location_type)
 
-daydf = merge(sensor_loc, purpledf, by.x = 'id', by.y = 'sensor_id') 
+daydf = merge(sensor_loc, purpledf, by.x = 'id', by.y = 'sensor_id')  # add the sensor locations to the data file
 
 write.csv(daydf, file='~/wildfires/all_purpleair.csv', row.names = FALSE)
 
-# filter to one day
+# write a file for one day for testing
 oneday = daydf %>% filter(as.Date(day_date) == as.Date('2018-11-15'))
-
-
-
 write.csv(day, file='~/wildfires/2018_bayarea_pm25_purple.csv', row.names = FALSE)
