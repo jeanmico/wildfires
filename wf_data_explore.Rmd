@@ -1,6 +1,8 @@
 ---
 title: "Wildfires - data exploration"
-output: html_document
+output:
+  html_document:
+    keep_md: yes
 ---
 
 ```{r setup, include=FALSE}
@@ -16,28 +18,186 @@ When you click the **Knit** button a document will be generated that includes bo
 ```{r echo=FALSE}
 library('lubridate')
 library('tidyverse')
+library('ggplot2')
+library('epitools')
+library('broom')
+library(pROC)
 ```
 
+Name our output files consistently
+```{r file naming}
+
+fp_base <<- '/Volumes/Padlock/wildfires/'
+fp_defs <<- paste(fp_base, 'defs/', sep = '')
+fp_data <<- paste(fp_base, 'data/', sep = '')
+fp_exp <<- paste(fp_base, 'exposure/', sep = '')
+#fp_out <<- paste(fp_base, 'output/', sep = '')
+fp_out <<- '~/wildfires/output/'
+#fp_img <<- paste(fp_base, 'images/', sep = '')
+fp_img <<- '~/wildfires/images/'
+
+image_name <- function(fname) {
+  return(paste(fp_img, Sys.Date(), '_', fname, '.png', sep = ''))
+}
+
+output_name <- function(fname) {
+  return(paste(fp_out, Sys.Date(), '_', fname, '.csv', sep = ''))
+}
+
+```
+
+```{r time overlap}
+
+time_overlap <- function(df, varname, noexp_value) {
+  
+  triweeks = 12
+  tridays = triweeks*7
+
+  if (noexp_value ==TRUE) {
+    tmpstart = ymd(fire_start) - 365
+    tmpintvl =  as.interval(fire_length, tmpstart)
+  
+  } else {
+   tmpintvl = fire_intvl 
+  }
+  
+  df <- df %>% mutate(tri1 = as.interval(make_difftime(days = tridays), start_date),
+                              tri2 = case_when(int_end(tri1) + days(tridays) < baby_DOB ~
+                                                 as.interval(make_difftime(days = tridays), int_end(tri1)),
+                                               TRUE ~ interval(int_end(tri1), baby_DOB)),
+                              tri3 = interval(int_end(tri2), baby_DOB)
+                              )
+  
+  
+  # determine each trimester's overlap with the fire
+  df <- df %>% mutate(overlap1 = case_when(int_overlaps(tri1, tmpintvl) ~ 
+                                                     as.duration(intersect(tri1, tmpintvl)),
+                                                   TRUE ~ 0),
+                              overlap2 = case_when(int_overlaps(tri2, tmpintvl) ~ 
+                                                     as.duration(intersect(tri2, tmpintvl)),
+                                                   TRUE ~ 0),
+                              overlap3 = case_when(int_overlaps(tri3, tmpintvl) ~ 
+                                                     as.duration(intersect(tri3, tmpintvl)),
+                                                   TRUE ~ 0) )
+  
+  # determine which trimester has the greatest overlap with the fire
+  cols = c('overlap1', 'overlap2', 'overlap3')
+  df <- df %>% mutate(!!varname := case_when(
+    overlap1 == 0 & overlap2 == 0 & overlap3 == 0 ~ '',
+    TRUE ~ cols[max.col(df %>% dplyr::select(all_of(cols)))]
+        ))
+  
+  if (!noexp_value) {
+    # add the total overlap in days
+    df <- df %>% mutate(total_overlap_days = case_when(
+      preg_fire_ovrlp ~ as.numeric(intersect(tmpintvl, preg_intvl), 'days'),
+      TRUE ~ 0))
+  }
+  df <- df %>% dplyr::select(-c(tri1, tri2, tri3, overlap1, overlap2, overlap3))
+  
+  return(df)
+  }
+
+```
+
+
+```{r trimester overlap}
+# this function determines the trimester with the greatest overlap of the fire period. If the pregnancy DOES NOT overlap with the fire period, this variable is blank. 
+
+# A second variable is created which is populated regardless of fire overlap. If the pregnancy overlapped the fire, this variable is the same as the previous. If it did not, this variable indicates what trimester the pregnancy was in during the same dates (nov 9 to nov 21) in 2017.
+
+trimester_overlap <- function(births_df) {
+  # create first variable
+  tmpdf <- time_overlap(births_df, 'exposure_tri', FALSE)
+  
+  tmpdf <- time_overlap(tmpdf, 'nonexposure_tri', TRUE)
+  
+  tmpdf <- tmpdf %>% mutate(tri_summary = case_when(
+    exposure_tri != '' ~ exposure_tri, 
+    nonexposure_tri != '' ~ nonexposure_tri,
+    TRUE ~ '')
+    )
+  
+  return(tmpdf)
+  
+  }
+
+```
+
+```{r contingency table}
+cont_tbl <- function(df, tri, tert) {
+
+  tmpdf <- df %>% filter(tri_summary == tri & tertile_exp == tert)
+  
+  tst <- epitable(tmpdf$binary_exposed, tmpdf$preterm)
+  
+  tmpepi = epitab(tst, method = 'riskratio')
+  
+  write.csv(tmpepi$tab, file = output_name(paste(tri, 'tertile', tert, sep = '_')), row.names = FALSE)
+  return(data.frame(t(tmpepi$tab[2,])))
+}
+
+```
+
+```{r test train split}
+testtrain = function(df) {
+  df = df %>% mutate(testset = rbinom(n = nrow(df), size = 1, prob = .25))
+  return(df)
+  }
+
+```
+
+
+```{r loglinear}
+loglin <- function(df, expvar, fire_only) {
+  # df <- df %>% filter(train == TRUE)
+  tmpmdl = glm(preterm ~ . , data = df, family = 'poisson')
+  
+  tmpdf = tidy(tmpmdl)
+  
+  if (fire_only == TRUE) {
+    write.csv(tmpdf, file = output_name(paste('loglinear_fire', expvar, sep = '_')), row.names = FALSE)
+  } else{
+    write.csv(tmpdf, file = output_name(paste('loglinear', expvar, sep = '_')), row.names = FALSE)
+    }
+  }
+
+```
+
+
+
+Define our covariates (globally)
+```{r covariates}
+
+partcov <<- c("preterm", "race", "ipi", "edu", "insurance", "pn_care", "wic", "mom_age"
+              )
+
+fullcov <<- c(partcov, "mental_disorder", "preexist_diabetes", "preexist_HTN", 'nulliparous', 'drug_abuse', 'alcohol_abuse', 'gest_diabetes', 'gest_HTN')
+
+```
+
+Start processing
 ```{r}
-raw_data = read.csv('/Volumes/Padlock/wildfires/birth_file_bayarea2021-02-01.csv')
+raw_data = read.csv(paste(fp_data,'birth_file_bayarea2021-09-08.csv', sep = ''))
 
 births <- raw_data
 # filter out any births here:
+
 # restrict to singletons
 births <- births %>% filter(PLURALITY_16 == 1)
-```
 
-Our sample size is `r nrow(base_addresses)`. Counties included: Alameda, 
-
-# Exploratory figures
-
-Remove or correct NA values
-```{r}
+# gestational weeks must be known
 births = births %>% filter(!is.na(gest_weeks))
+
+# set nulliparous NA values to 0 (this is how the data are coded)
+births = births %>% mutate(nulliparous = case_when(nulliparous == 1 ~ 1,
+                                                   TRUE ~ 0))
+
 ```
 
+Rename variables for convenience and readability
 ```{r rename vars}
-decodes = read.csv('~/wildfires/data_dict.csv')
+decodes = read.csv(paste(fp_defs,'data_dict.csv', sep = ''))
 
 dropcols <- decodes %>% filter(varname == '') %>% dplyr::select(rawname) # drop unneeded columns
 births_tmp <- births %>% dplyr::select(-(dropcols$rawname))
@@ -57,8 +217,8 @@ births <- births_tmp
 Condense multiple binary columns into factors:
 ```{r}
 
-factor_defs = read.csv('~/wildfires/factor_defs.csv')
-factor_comps = read.csv('~/wildfires/factor_components.csv')
+factor_defs = read.csv(paste(fp_defs, 'factor_defs.csv', sep = ''))
+factor_comps = read.csv(paste(fp_defs, 'factor_components.csv', sep = ''))
 
 fact_cols = factor_defs$factname
 
@@ -87,17 +247,6 @@ for (myfact in fact_cols) {
 births <- births_tmp
 ```
 
-Make an intro table to make sure our results are correct
-```{r check work}
-library(tableone)
-mytab <- CreateTableOne(vars = c(fact_cols, 'wic'), data = births, factorVars = fact_cols)
-
-mytab
-```
-
-
-
-
 Apply a filter by gestational week: gestational weeks must be known, and <=41; add preterm birth flag
 ```{r}
 
@@ -105,6 +254,11 @@ births = births %>% filter(gest_weeks < 42)
 births <- births %>% mutate(preterm = case_when(
   gest_weeks < 37 ~ 1,
   TRUE ~ 0))
+births <- births %>% mutate(pt_early = case_when(gest_weeks < 28 ~ 1, TRUE ~ 0),
+                            pt_mid = case_when(gest_weeks < 36 & gest_weeks > 28 ~ 1, TRUE ~ 0),
+                            pt_late = case_when(gest_weeks < 38 & gest_weeks > 35 ~ 1, TRUE ~0))
+
+births <- births %>% mutate(outcome = preterm)
 ```
 
 Determine the start of the pregnancy (baby birth date - gestational weeks)
@@ -115,73 +269,21 @@ births <- births %>% mutate(baby_DOB = mdy(baby_DOB)) %>%
 
 Define the fire period
 ```{r}
-# this definition of the fire interval may change as the project continues
-fire_start = '2018-11-08'
-fire_length = make_difftime(days = 14) 
 
-fire_intvl = as.interval(fire_length, ymd(fire_start))
+fire_start <<- '2018-11-09'
+fire_length <<- make_difftime(days = 12) 
+fire_intvl <<- as.interval(fire_length, ymd(fire_start))
+fire_end <<- int_end(fire_intvl)
 
 births <- births %>% mutate(preg_intvl = as.interval(make_difftime(weeks = gest_weeks), start_date))
 
 births <- births %>% mutate(preg_fire_ovrlp = int_overlaps(preg_intvl, fire_intvl))
 
-table(births$preg_fire_ovrlp)
-```
-
-Determine the length of exposure in each trimester and which trimester has the greatest length of exposure.
-```{r}
-
-triweeks = 12
-tridays = triweeks*7
-
-
-births <- births %>% mutate(tri1 = as.interval(make_difftime(days = tridays), start_date),
-                            tri2 = case_when(int_end(tri1) + days(tridays) < baby_DOB ~
-                                               as.interval(make_difftime(days = tridays), int_end(tri1)),
-                                             TRUE ~ interval(int_end(tri1), baby_DOB)),
-                            tri3 = interval(int_end(tri2), baby_DOB)
-                            )
-
-
-# determine each trimester's overlap with the fire
-births <- births %>% mutate(overlap1 = case_when(int_overlaps(tri1, fire_intvl) ~ 
-                                                   as.duration(intersect(tri1, fire_intvl)),
-                                                 TRUE ~ 0),
-                            overlap2 = case_when(int_overlaps(tri2, fire_intvl) ~ 
-                                                   as.duration(intersect(tri2, fire_intvl)),
-                                                 TRUE ~ 0),
-                            overlap3 = case_when(int_overlaps(tri3, fire_intvl) ~ 
-                                                   as.duration(intersect(tri3, fire_intvl)),
-                                                 TRUE ~ 0) )
-
-# determine which trimester has the greatest overlap with the fire
-cols = c('overlap1', 'overlap2', 'overlap3')
-births <- births %>% mutate(exposure_tri = case_when(
-  overlap1 == 0 & overlap2 == 0 & overlap3 == 0 ~ '',
-  TRUE ~ cols[max.col(births %>% dplyr::select(all_of(cols)))]
-      ))
-
-# add the total overlap in days
-births <- births %>% mutate(total_overlap_days = case_when(
-  preg_fire_ovrlp ~ as.duration(intersect(fire_intvl, preg_intvl))/60/60/24,  # convert seconds into days
-  TRUE ~ 0))
-
-# add a binary exposure variable
 births <- births %>% mutate(binary_exposed = case_when(
-  exposure_tri == '' ~ FALSE,
-  TRUE ~ TRUE
-  ))
-```
+  ymd(fire_start) %within% preg_intvl & ymd(fire_end) %within% preg_intvl ~ TRUE,
+  TRUE ~ FALSE
+))
 
-
-```{r}
-
-overlap_days_hist <- ggplot(births, aes(x=total_overlap_days)) + 
-  geom_histogram()  + 
-  theme_minimal() + 
-  scale_y_log10()
-
-overlap_days_hist
 ```
 
 We need to avoid a fixed cohort bias. We do this by choosing a conception date cutoff such that we see the delivery of infants of all gestational ages. In other words, 42 weeks prior to 2019-12-31. Additionally, we consider that pregnancies conceived after the fire to be "exposed." Finally, we must also eliminate any pregnancies that were already at term by the time the smoke event started.
@@ -189,6 +291,88 @@ We need to avoid a fixed cohort bias. We do this by choosing a conception date c
 cutoff_date = ymd('2019-12-31') - make_difftime(weeks = 42)
 
 births <- births %>% filter(start_date < cutoff_date)
+```
+
+More time filtering: our control group is people who delivered before the fire. Finally, we must also eliminate any pregnancies that were already at term by the time the smoke event started.
+```{r time filtering}
+# remove births conceived after the smoke period
+
+births_tmp <- births %>% mutate(keep_date = case_when(
+  start_date >= fire_end ~ FALSE,
+  TRUE ~ TRUE))
+
+births_tmp <- births_tmp %>% filter(keep_date)
+
+# pregnancies which were exposed AFTER they had reached 37 weeks
+term_length =  make_difftime(weeks = 37)
+
+births_tmp <- births_tmp %>% mutate(keep_date = case_when(
+  ymd(fire_start) - term_length >= start_date & binary_exposed == TRUE ~ FALSE,
+  TRUE ~ TRUE
+  ))
+
+births_tmp <- births_tmp %>% filter(keep_date == TRUE)
+births_tmp <- births_tmp %>% filter(x != 0)
+births <- births_tmp
+```
+
+Determine the length of exposure in each trimester and which trimester has the greatest length of exposure.
+
+```{r trimester overlap}
+births_tmp = births
+births_tmp = trimester_overlap(births)
+births_tmp = births_tmp %>% filter(tri_summary != '') # restricting our control group to those pregnant in Nov 2017 or 2018
+births_tmp <- births_tmp %>% filter(total_overlap_days %in% c(0, 12))
+births <- births_tmp
+```
+
+```{r half trimesters overlap}
+births <- births %>% mutate(halftri_exp = case_when(binary_exposed == TRUE ~ 
+                                                      as.numeric(.5*(ceiling(difftime(ymd(fire_start), ymd(start_date), unit = "weeks")/6) + 1)),
+                                                    TRUE ~ 0)) %>% 
+  mutate(halftri_exp = case_when(halftri_exp == 4 ~ 3.5, halftri_exp == 0.5 ~ 1, TRUE ~ halftri_exp))
+
+births <- births %>% mutate(halftri_non = case_when(binary_exposed == TRUE ~ 
+                                                      as.numeric(5*(ceiling(difftime(ymd('2017-11-09'), ymd(start_date), unit = "weeks")/6) + 1)),
+                                                    TRUE ~ 0)) %>% 
+  mutate(halftri_non = case_when(halftri_non == 4 ~ 3.5, TRUE ~ halftri_non))
+
+
+```
+
+Make an intro table to make sure our results are correct
+```{r check work}
+library(tableone)
+mytab <- CreateTableOne(vars = partcov, data = births, factorVars = c('preexist_HTN', 'preexist_diabetes', 'mental_disorder', 'nulliparous'))
+
+mytab
+#write.csv(mytab, file = output_name('tableone'), row.names = FALSE)
+print(mytab )
+```
+
+What is our overall preterm birth rate?
+```{r preterm birth rate}
+ptb_rate = nrow(births %>% filter(preterm == 1))/nrow(births)
+ptb_rate
+
+```
+
+Merge census tertiles in.
+```{r census tertiles}
+births_tmp = births
+censtert = read.csv(paste(fp_data,'census_tertiles.csv', sep = ''))
+
+births_tmp = births_tmp %>% mutate(geocensus = as.numeric(substr(births_tmp$geoid, 1, 10)))
+
+births_tmp = merge(births_tmp, censtert, by.x = 'geocensus', by.y = 'geonum')
+births_tmp <- births_tmp %>% mutate(tertile_exp = case_when(binary_exposed == TRUE ~ firetert,
+                                                            TRUE ~ basetert))
+births = births_tmp 
+
+# How many census tracts changed tertiles?
+
+nrow(censtert %>% filter(firetert != basetert))
+nrow(censtert %>% filter(abs(firetert - censtert) == 2))
 ```
 
 
@@ -205,9 +389,15 @@ births_dateplt <- births_dateplt %>% mutate(exposure_decode =
 
 timeplt <- ggplot(births_dateplt, aes(as.Date(start_date), date_order, color=exposure_decode)) +
   geom_crossbar(aes(xmin = as.Date(start_date), xmax = as.Date(baby_DOB)), width = 0.2) +
-  scale_color_manual(values=c("grey", '#003366', '#2c6d62', '#9d78ba', '#daa425', '#923a49')) +
+  #scale_color_manual(values=c("grey", '#003366', '#2c6d62', '#9d78ba', '#daa425', '#923a49')) +
+  scale_color_manual(values=c("grey",  '#003061','#8557a8', '#2d7166', '#daa425', '#923a49')) +
+  #scale_color_manual(values=c("grey", '#DDAA33', '#004488', '#BB5566', '#daa425', '#923a49')) +  # ok except for orange rectangle
+  #scale_color_manual(values=c("grey", '#a56eff', '#005d5d', '#9f1853', '#daa425', '#923a49')) +  # fine
+  #scale_color_manual(values=c("grey", '#4477AA', '#CCBB44', '#AA3377', '#daa425', '#923a49')) +  # ugly
   geom_rect(aes(xmin=as.Date(int_start(fire_intvl)), xmax=as.Date(int_end(fire_intvl)), ymin=0, ymax=nrow(births_dateplt)),
               color="orange", alpha=0.007, fill='orange') +
+  geom_rect(aes(xmin=as.Date('2017-11-09'), xmax=as.Date('2017-11-21'), ymin=0, ymax=nrow(births_dateplt)),
+              color="#6699CC", alpha=0.007, fill='#6699CC') +
   scale_x_date() + 
   xlab('Date') + 
   ylab('Pregnancy') +
@@ -217,72 +407,80 @@ timeplt <- ggplot(births_dateplt, aes(as.Date(start_date), date_order, color=exp
         plot.background=element_blank(), 
         panel.background=element_rect(fill='white'), 
         panel.grid = element_line(color='grey', size=.1)) +
-  #theme_minimal() +
+  theme_bw() +
   labs(color="Exposure timing")
   
 
-timeplt
+#timeplt
+#ggsave(timeplt, file = image_name('timeplot'), width = 12, height = 7)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+Due to computational constraints, exposure rasters are calculated on a cluster; exposure values per person are also assigned on the cluster. This code block saves the latitude, longitude, IDs, and dates to a file so we can extract the PM2.5 values at those locations.
+```{r lookup geo points}
 
-More time filtering: we consider that pregnancies conceived after the fire to be "exposed." Finally, we must also eliminate any pregnancies that were already at term by the time the smoke event started.
-
-```{r time filtering}
-# remove births conceived after the smoke period
-fire_end = int_end(fire_intvl)
-
-births_tmp <- births %>% mutate(keep_date = case_when(
-  start_date >= fire_end ~ FALSE,
-  TRUE ~ TRUE))
-
-births_tmp <- births_tmp %>% filter(keep_date == TRUE)
-
-# pregnancies which were exposed AFTER they had reached 37 weeks
-term_length =  make_difftime(weeks = 37)
-
-births_tmp <- births_tmp %>% mutate(keep_date = case_when(
-  ymd(fire_start) - term_length >= start_date & binary_exposed == TRUE ~ FALSE,
-  TRUE ~ TRUE
-  ))
-
-births_tmp <- births_tmp %>% filter(keep_date == TRUE)
-births <- births_tmp
+exposure_calc <- births %>% dplyr::select(VS_unique, x, y, start_date, baby_DOB)
+colnames(exposure_calc) <- c("VS_unique", "longitude", "latitude", "start_date", "baby_DOB")
+write.csv(exposure_calc, file = output_name('lookup_points'), row.names = FALSE)
 
 ```
 
+Add in exposure data.
+```{r exposure add}
+# Read files
+exposure_sum = read.csv(paste(fp_exp,'exposure_sum_all.csv', sep = ''))
+exposure_na = read.csv(paste(fp_exp, 'exposure_na_all.csv', sep = ''))
+exposure_counts100 = read.csv(paste(fp_exp,'exposure_counts_all100.csv', sep = ''))
+exposure_counts50 = read.csv(paste(fp_exp,'exposure_counts_all50.csv', sep = ''))
 
-```{r}
-ggsave(timeplt, file = '/Volumes/Padlock/wildfires/timeplot.png')
-```
+# Rename variables
+exposure_sum <- exposure_sum %>% select(-X) %>% rename(pm25sum = V1)
+exposure_na <- exposure_na %>% select(-X) %>% rename(pm25na = V1)
+exposure_counts100 <- exposure_counts100 %>% select(-X) %>% rename(pm25count_100 = V1)
+exposure_counts50 <- exposure_counts50 %>% select(-X) %>% rename(pm25count_50 = V1)
 
-Plot: pregnancy duration by conception date
-```{r pregnancy duration by conception}
+# merge files
+births_tmp <- merge(births, exposure_sum)
+births_tmp <- merge(births_tmp, exposure_na)
+births_tmp <- merge(births_tmp, exposure_counts100)
+births_tmp <- merge(births_tmp, exposure_counts50)
+births<- births_tmp
 
-preg_duration <- ggplot(births, aes(x = as.Date(start_date), y = gest_weeks, color=binary_exposed)) +
-  geom_point() +
-  theme_bw() +
-  scale_x_date()
-
-
-preg_duration
-
-ggsave(preg_duration, file='~/wildfires/images/duration_by_start_date.png')
-```
-
-Histograms comparing exposed to unexposed 
-
-```{r hist binary exposure}
-
-gest_hist <- ggplot(births, aes(x=gest_weeks) ) +
-  geom_histogram(bins = max(births$gest_weeks) - min(births$gest_weeks)) +
-  theme_bw() +
-  scale_y_log10()
-gest_hist
+# Calculate mean exposure.
+births <- births %>% 
+  mutate(pm25mean = pm25sum/(time_length(baby_DOB - start_date, unit = "days") - pm25na))
 
 ```
 
-Histogram comparison
+Boxplots of mean exposure, comparing those who were exposed vs those who were not.
+```{r exposure violins}
+meanexp_box = ggplot(births, aes(x = binary_exposed, y = pm25mean)) +
+                geom_boxplot() + 
+  theme_bw()
+
+meanexp_box
+
+ggsave(meanexp_box, file = image_name('meanexp_fullpreg_boxplot'))
+```
+
+
+
+T-test to evaluate whether there is a difference in pregnancy mean pm2.5 between those who experienced the fire and those who did not.
+```{r ttest}
+
+
+pm25_noexp = births %>% filter(binary_exposed == FALSE)
+pm25_exp = births %>% filter(binary_exposed == TRUE)
+tt = t.test(pm25_noexp$pm25mean, pm25_exp$pm25mean)
+
+tt
+
+```
+
+
+
+
+
+Histogram comparison of the gestational age between exposed and unexposed.
 
 ```{r histogram comparison}
 compare_plt = births %>% mutate(unexp_weeks = case_when(binary_exposed == 0 ~gest_weeks)) %>%
@@ -299,80 +497,258 @@ compare_hist <-ggplot(compare_plt, aes(x=x) ) +
 
 compare_hist
 
-```
-
-2D histogram??
-```{r 2d hist}
-twod_hist <- ggplot(births, aes(x=start_date, y=gest_weeks)) +
-  geom_bin2d()
-
-twod_hist
+ggsave(compare_hist, file = image_name('comparison_hist'))
 
 ```
 
 
 
-Simple table
+
+
+Simple 2x2 table: is exposure to the wildfire associated with increased risk of PTB?
 ```{r}
-library(epitools)
-tst <- epitable(births$binary_exposed, births$preterm)
 
-epitab(tst)
 
-```
+births_before <- births %>% filter(baby_DOB < ymd(fire_start) | binary_exposed == TRUE)
+tst <- epitable(births_before$binary_exposed, births_before$preterm)
 
-Slightly less simple table
-```{r trimester table}
-
-tst_tri <- epitable(births$exposure_tri, births$preterm)
-
-epitab(tst_tri)
+epitab(tst, method = 'riskratio')
 
 ```
 
+Slightly more complicated table: does the trimester of exposure matter?
+```{r 3 trimester table}
 
-Test a very simple logistic regression model: outcome is preterm birth (binary), input is covariates and duration trimester exposure.
 
-```{r}
-simple_lgt <- glm(preterm ~ race + ipi + edu + insurance + pn_care + bmi + wic + overlap1 + overlap2 + overlap3, data = births)
+tst_3tri <- epitable(births$exposure_tri, births$preterm) 
 
-summary(simple_lgt)
+epitab(tst_3tri)
+
+```
+
+Slightly more complicated table: does the half trimester of exposure matter?
+```{r half trimester table}
+
+
+tst_htri <- epitable(births$halftri_exp, births$preterm) 
+
+epi_htri = data.frame(epitab(tst_htri, method = "riskratio"))
+epi_htri$htri = as.numeric(rownames(epi_htri))
+
+write.csv(epi_htri, file = output_name('half_tri_RR'))
+
+
+htri_risk = ggplot(epi_htri, aes(x = htri, y = tab.riskratio, ymin = tab.lower, ymax = tab.upper)) + 
+  geom_pointrange() + 
+  geom_hline(yintercept = 1) + 
+  ylab("Risk Ratio of Preterm Birth") + 
+  xlab("Half Trimester") + 
+  theme_bw()
+
+
+htri_risk
+
+ggsave(htri_risk, file = image_name('halftri_RR'))
+```
+
+ 
+ 
+Model building
+
+test and train split
+```{r test and train split}
+births <- testtrain(births)
+births_trn = births %>% filter(testset == 0)
+```
+
+```{r pm25exposure logit}
+
+simplecont_exp <- glm(preterm ~  pm25mean, data = births_trn, family = 'poisson')
+
+summary(simplecont_exp)  # pm25 mean is significant here
 
 ```
 
 
+Test a very simple log linear model: outcome is preterm birth (binary), input is covariates and trimester of exposure.
 
-Rolling mean?
-```{r rolling mean}
+```{r models: all, trimester of exposure}
+expvars = c('binary_exposed', 'exposure_tri', 'pm25count_50', 'pm25count_100', 'pm25mean')
 
-library(zoo)
-
-rollmean <- ggplot(births, aes(x=start_date, y=gest_weeks)) +
-  #geom_point() +
-  geom_line(aes(y=rollmean(gest_weeks, 30, na.pad=TRUE))) #+
-  #geom_vline(aes(xintercept=as.Date(fire_start)))
-
-rollmean
+for (i in 1:length(expvars)) {
+  mdf = births_trn %>% dplyr::select(c(all_of(partcov)), expvars[[i]])
+  loglin(mdf, expvars[[i]], FALSE)
   
-ggsave(rollmean, file='~/wildfires/rollmean_30.png')
+  }
 
 ```
 
-Very simple time series 
-```{r simple timeseries}
 
-library(its.analysis)
 
-my_its <- itsa.model(data = births,
-                     time = start_date,
-                     depvar = births$gest_weeks,
-                     interrupt_var = births$binary_exposure)
+# Risk by exposure DURING the fire
+
+First, test high fire tertiles against low fire tertiles **in the control group** to determine whether there are significant differences.
+```{r high fire vs low fire}
+firetertdf = births %>% filter(firetert == 3 | firetert == 1)
+firetert_census = unique(firetertdf$geocensus)
+
+compare_control = births %>% filter(geocensus %in% firetert_census & binary_exposed == 0)
+
+compare_tbl <- CreateTableOne(vars = c(fact_cols, 'wic', 'preterm'), data = compare_control, strata = 'firetert', test = TRUE,  factorVars = fact_cols)
+
+compare_tbl
 
 ```
 
-```{r logistic lasso}
-library(glmnet)
 
 
 
+Only consider people who were exposed
+```{r}
+exp_births <- births %>% filter(binary_exposed)
+hist(exp_births$pm25mean)
+
+
+exp_births <- exp_births %>% mutate(ftert_desc  = case_when(
+  firetert == 1 ~ "low",
+  firetert == 2 ~ "medium",
+  firetert == 3 ~ "high"))
+
+#write.csv(exp_births$VS_unique, file = '/Volumes/Padlock/wildfires/exposure/exposed_ids.csv', row.names = FALSE)
+
+exp_pm_summary = read.csv(paste(fp_exp, 'exp_pm_summary.csv', sep = ''))
+exp_births <- merge(exp_births, exp_pm_summary, by = "VS_unique")
+
+exp_births <- exp_births %>% mutate(pm25mean_exp = pm25sum_exp/(time_length(fire_intvl, unit = "days")))
+
+
+# write simplified exposed births file for mapping
+fire_births_map = exp_births %>% dplyr::select(VS_unique, x, y, pm25mean, pm25mean_exp, pm25peak, preterm)
+
+write.csv(fire_births_map, file = '/Volumes/Padlock/wildfires/fire_births_map.csv', row.names = FALSE)
+```
+
+
+```{r fire pm}
+
+firemean_hist = ggplot(exp_births, aes(x = pm25mean_exp)) + 
+  geom_histogram() + 
+  theme_bw()
+
+firemean_hist
+
+
+```
+
+
+```{r fire pm}
+hist(exp_births$pm25peak)
+firepeak_hist = ggplot(exp_births, aes(x = pm25peak)) + 
+  geom_histogram() + 
+  theme_bw()
+
+firepeak_hist
+```
+
+analysis start
+
+```{r 3 trimester table}
+
+exp_3tri <- epitable(exp_births$exposure_tri, exp_births$preterm, rev = "rows") 
+
+epitab(exp_3tri)
+
+```
+
+
+```{r tertile table}
+
+firetert_tbl <- epitable(exp_births$ftert_desc, exp_births$preterm)
+
+epitab(firetert_tbl, method = 'riskratio')
+```
+
+
+```{r fire train split}
+
+exp_births = testtrain(exp_births)
+exp_births_trn = exp_births %>% filter(testset == 0)
+
+```
+
+
+```{r models: all, trimester of exposure}
+expvars = c('exposure_tri', 'pm25count_50', 'pm25count_100', 'pm25mean', 'pm25peak', 'firemean', 'firetert')
+
+for (i in 1:length(expvars)) {
+  mdf = exp_births_trn %>% dplyr::select(c(all_of(partcov)), expvars[[i]])
+  loglin(mdf, expvars[[i]], TRUE)
+  
+  }
+
+```
+
+
+
+
+
+
+```{r ftert loglinear}
+
+ftert_log = glm(preterm ~ race + ipi + edu + insurance + pn_care + bmi + wic + preexist_HTN + preexist_diabetes +  firetert, data = exp_births, family = 'poisson')
+
+summary(ftert_log)
+
+```
+
+
+Comparing high fire tertiles to high baseline tertiles - do we see a difference?
+```{r high tertile tracts compare}
+tertcomp = births %>% filter(firetert == 3 | basetert == 3) %>% mutate(hightert = case_when(firetert == 3 & basetert == 3 ~ "both",
+                                                                                            firetert == 3 ~ "fire", 
+                                                                                            TRUE ~ "base"))
+terttab = CreateTableOne(vars = c(fact_cols, 'wic', 'preterm'), data = tertcomp, strata = 'hightert', test = TRUE,  factorVars = fact_cols)
+
+terttab
+
+```
+
+
+```{r median income ttest}
+acs = read.csv(paste(fp_data, 'acs_data_5yr_2019.csv', sep = ''))
+acs <- acs %>% filter(rename == 'median_income')
+
+tertacs = merge(tertcomp, acs, by.x = "geocensus", by.y = "GEOID")
+
+terthigh_base = tertacs %>% filter(basetert == 3)
+terthigh_fire = tertacs %>% filter(firetert == 3)
+tthigh = t.test(terthigh_base$estimate, terthigh_fire$estimate)
+
+tthigh
+
+
+tertlow_base = tertacs %>% filter(basetert == 1)
+tertlow_fire = tertacs %>% filter(firetert == 1)
+ttlow = t.test(tertlow_base$estimate, tertlow_fire$estimate)
+
+ttlow
+
+
+```
+
+
+#ARCHIVE
+
+Plot: pregnancy duration by conception date
+```{r pregnancy duration by conception}
+
+preg_duration <- ggplot(births, aes(x = as.Date(start_date), y = gest_weeks, color=binary_exposed)) +
+  geom_point() +
+  theme_bw() +
+  scale_x_date()
+
+
+preg_duration
+
+ggsave(preg_duration, file='~/wildfires/images/duration_by_start_date.png')
 ```
