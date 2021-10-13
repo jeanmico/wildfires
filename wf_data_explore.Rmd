@@ -9,11 +9,7 @@ output:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+## Libraries, Globals, Functions
 
 ```{r echo=FALSE}
 library('lubridate')
@@ -31,10 +27,10 @@ fp_base <<- '/Volumes/Padlock/wildfires/'
 fp_defs <<- paste(fp_base, 'defs/', sep = '')
 fp_data <<- paste(fp_base, 'data/', sep = '')
 fp_exp <<- paste(fp_base, 'exposure/', sep = '')
-#fp_out <<- paste(fp_base, 'output/', sep = '')
-fp_out <<- '~/wildfires/output/'
-#fp_img <<- paste(fp_base, 'images/', sep = '')
-fp_img <<- '~/wildfires/images/'
+fp_out <- paste(fp_base, 'output/', sep = '')
+#fp_out <<- '~/wildfires/output/'
+fp_img <- paste(fp_base, 'images/', sep = '')
+#fp_img <<- '~/wildfires/images/'
 
 image_name <- function(fname) {
   return(paste(fp_img, Sys.Date(), '_', fname, '.png', sep = ''))
@@ -129,7 +125,7 @@ cont_tbl <- function(df, tri, tert) {
 
   tmpdf <- df %>% filter(tri_summary == tri & tertile_exp == tert)
   
-  tst <- epitable(tmpdf$binary_exposed, tmpdf$preterm)
+  tst <- epitable(tmpdf$binary_exposed, tmpdf$outcome)
   
   tmpepi = epitab(tst, method = 'riskratio')
   
@@ -151,7 +147,7 @@ testtrain = function(df) {
 ```{r loglinear}
 loglin <- function(df, expvar, fire_only) {
   # df <- df %>% filter(train == TRUE)
-  tmpmdl = glm(preterm ~ . , data = df, family = 'poisson')
+  tmpmdl = glm(outcome ~ . , data = df, family = 'poisson')
   
   tmpdf = tidy(tmpmdl)
   
@@ -169,7 +165,7 @@ loglin <- function(df, expvar, fire_only) {
 Define our covariates (globally)
 ```{r covariates}
 
-partcov <<- c("preterm", "race", "ipi", "edu", "insurance", "pn_care", "wic", "mom_age"
+partcov <<- c("outcome", "race", "ipi", "edu", "insurance", "pn_care", "wic", "mom_age"
               )
 
 fullcov <<- c(partcov, "mental_disorder", "preexist_diabetes", "preexist_HTN", 'nulliparous', 'drug_abuse', 'alcohol_abuse', 'gest_diabetes', 'gest_HTN')
@@ -248,17 +244,30 @@ births <- births_tmp
 ```
 
 Apply a filter by gestational week: gestational weeks must be known, and <=41; add preterm birth flag
-```{r}
+```{r add outcomes}
 
 births = births %>% filter(gest_weeks < 42)
 births <- births %>% mutate(preterm = case_when(
   gest_weeks < 37 ~ 1,
   TRUE ~ 0))
-births <- births %>% mutate(pt_early = case_when(gest_weeks < 28 ~ 1, TRUE ~ 0),
-                            pt_mid = case_when(gest_weeks < 36 & gest_weeks > 28 ~ 1, TRUE ~ 0),
+births <- births %>% mutate(pt_vearly = case_when(gest_weeks <= 28 ~ 1, TRUE ~ 0),
+                            pt_early = case_when(gest_weeks >28 & gest_weeks <=32 ~ 1, TRUE ~ 0),
+                            pt_mid = case_when(gest_weeks < 36 & gest_weeks > 32 ~ 1, TRUE ~ 0),
                             pt_late = case_when(gest_weeks < 38 & gest_weeks > 35 ~ 1, TRUE ~0))
 
-births <- births %>% mutate(outcome = preterm)
+births <- births %>% mutate(pt_subtime = case_when(
+  preterm == 0 ~ 0,
+  gest_weeks < 28 ~ 3, 
+  gest_weeks < 36 & gest_weeks > 28 ~ 2,
+  TRUE ~ 3))
+```
+
+```{r define outcome}
+myoutcome = 'pt_late'
+births <- births %>% mutate(outcome = births[[myoutcome]])
+
+fp_out <<- paste(fp_out, myoutcome, '/', sep = '')
+fp_img <<- paste(fp_img, myoutcome, '/', sep = '')
 ```
 
 Determine the start of the pregnancy (baby birth date - gestational weeks)
@@ -352,7 +361,7 @@ print(mytab )
 
 What is our overall preterm birth rate?
 ```{r preterm birth rate}
-ptb_rate = nrow(births %>% filter(preterm == 1))/nrow(births)
+ptb_rate = nrow(births %>% filter(outcome == 1))/nrow(births)
 ptb_rate
 
 ```
@@ -480,26 +489,7 @@ tt
 
 
 
-Histogram comparison of the gestational age between exposed and unexposed.
 
-```{r histogram comparison}
-compare_plt = births %>% mutate(unexp_weeks = case_when(binary_exposed == 0 ~gest_weeks)) %>%
-  mutate(exp_weeks = case_when(binary_exposed == 1 ~gest_weeks))
-
-nbins_exp = max(compare_plt$exp_weeks, na.rm=TRUE) - min(compare_plt$exp_weeks, na.rm=TRUE)
-nbins_unexp = max(compare_plt$unexp_weeks, na.rm=TRUE) - min(compare_plt$unexp_weeks, na.rm=TRUE)
-
-compare_hist <-ggplot(compare_plt, aes(x=x) ) +
-  geom_histogram( aes(x = unexp_weeks), fill="#69b3a2", bins=nbins_unexp, alpha = .8 ) +
-  geom_histogram( aes(x = exp_weeks), fill= "#404080", bins=nbins_exp, alpha = .8) +
-  xlab("Pregnancy duration in gestational weeks") +
-  theme_bw()
-
-compare_hist
-
-ggsave(compare_hist, file = image_name('comparison_hist'))
-
-```
 
 
 
@@ -510,7 +500,7 @@ Simple 2x2 table: is exposure to the wildfire associated with increased risk of 
 
 
 births_before <- births %>% filter(baby_DOB < ymd(fire_start) | binary_exposed == TRUE)
-tst <- epitable(births_before$binary_exposed, births_before$preterm)
+tst <- epitable(births_before$binary_exposed, births_before$outcome)
 
 epitab(tst, method = 'riskratio')
 
@@ -520,7 +510,7 @@ Slightly more complicated table: does the trimester of exposure matter?
 ```{r 3 trimester table}
 
 
-tst_3tri <- epitable(births$exposure_tri, births$preterm) 
+tst_3tri <- epitable(births$exposure_tri, births$outcome) 
 
 epitab(tst_3tri)
 
@@ -530,7 +520,7 @@ Slightly more complicated table: does the half trimester of exposure matter?
 ```{r half trimester table}
 
 
-tst_htri <- epitable(births$halftri_exp, births$preterm) 
+tst_htri <- epitable(births$halftri_exp, births$outcome) 
 
 epi_htri = data.frame(epitab(tst_htri, method = "riskratio"))
 epi_htri$htri = as.numeric(rownames(epi_htri))
@@ -563,7 +553,7 @@ births_trn = births %>% filter(testset == 0)
 
 ```{r pm25exposure logit}
 
-simplecont_exp <- glm(preterm ~  pm25mean, data = births_trn, family = 'poisson')
+simplecont_exp <- glm(outcome ~  pm25mean, data = births_trn, family = 'poisson')
 
 summary(simplecont_exp)  # pm25 mean is significant here
 
@@ -583,8 +573,8 @@ for (i in 1:length(expvars)) {
 
 ```
 
-
-
+### QUESTION 2 ####################
+###################################
 # Risk by exposure DURING the fire
 
 First, test high fire tertiles against low fire tertiles **in the control group** to determine whether there are significant differences.
@@ -604,7 +594,7 @@ compare_tbl
 
 
 Only consider people who were exposed
-```{r}
+```{r restricting to exposed}
 exp_births <- births %>% filter(binary_exposed)
 hist(exp_births$pm25mean)
 
@@ -623,7 +613,7 @@ exp_births <- exp_births %>% mutate(pm25mean_exp = pm25sum_exp/(time_length(fire
 
 
 # write simplified exposed births file for mapping
-fire_births_map = exp_births %>% dplyr::select(VS_unique, x, y, pm25mean, pm25mean_exp, pm25peak, preterm)
+fire_births_map = exp_births %>% dplyr::select(VS_unique, x, y, pm25mean, pm25mean_exp, pm25peak, outcome)
 
 write.csv(fire_births_map, file = '/Volumes/Padlock/wildfires/fire_births_map.csv', row.names = FALSE)
 ```
@@ -654,7 +644,7 @@ analysis start
 
 ```{r 3 trimester table}
 
-exp_3tri <- epitable(exp_births$exposure_tri, exp_births$preterm, rev = "rows") 
+exp_3tri <- epitable(exp_births$exposure_tri, exp_births$outcome, rev = "rows") 
 
 epitab(exp_3tri)
 
@@ -663,7 +653,7 @@ epitab(exp_3tri)
 
 ```{r tertile table}
 
-firetert_tbl <- epitable(exp_births$ftert_desc, exp_births$preterm)
+firetert_tbl <- epitable(exp_births$ftert_desc, exp_births$outcome)
 
 epitab(firetert_tbl, method = 'riskratio')
 ```
@@ -695,7 +685,7 @@ for (i in 1:length(expvars)) {
 
 ```{r ftert loglinear}
 
-ftert_log = glm(preterm ~ race + ipi + edu + insurance + pn_care + bmi + wic + preexist_HTN + preexist_diabetes +  firetert, data = exp_births, family = 'poisson')
+ftert_log = glm(outcome ~ race + ipi + edu + insurance + pn_care + bmi + wic + preexist_HTN + preexist_diabetes +  firetert, data = exp_births, family = 'poisson')
 
 summary(ftert_log)
 
@@ -738,6 +728,27 @@ ttlow
 
 
 #ARCHIVE
+
+Histogram comparison of the gestational age between exposed and unexposed.
+
+```{r histogram comparison}
+compare_plt = births %>% mutate(unexp_weeks = case_when(binary_exposed == 0 ~gest_weeks)) %>%
+  mutate(exp_weeks = case_when(binary_exposed == 1 ~gest_weeks))
+
+nbins_exp = max(compare_plt$exp_weeks, na.rm=TRUE) - min(compare_plt$exp_weeks, na.rm=TRUE)
+nbins_unexp = max(compare_plt$unexp_weeks, na.rm=TRUE) - min(compare_plt$unexp_weeks, na.rm=TRUE)
+
+compare_hist <-ggplot(compare_plt, aes(x=x) ) +
+  geom_histogram( aes(x = unexp_weeks), fill="#69b3a2", bins=nbins_unexp, alpha = .8 ) +
+  geom_histogram( aes(x = exp_weeks), fill= "#404080", bins=nbins_exp, alpha = .8) +
+  xlab("Pregnancy duration in gestational weeks") +
+  theme_bw()
+
+compare_hist
+
+ggsave(compare_hist, file = image_name('comparison_hist'))
+
+```
 
 Plot: pregnancy duration by conception date
 ```{r pregnancy duration by conception}
