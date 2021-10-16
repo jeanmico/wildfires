@@ -183,7 +183,10 @@ births <- raw_data
 births <- births %>% filter(PLURALITY_16 == 1)
 
 # gestational weeks must be known
+n_all = nrow(births)
 births = births %>% filter(!is.na(gest_weeks))
+n_gest = nrow(births)
+print(n_all - n_gest)
 
 # set nulliparous NA values to 0 (this is how the data are coded)
 births = births %>% mutate(nulliparous = case_when(nulliparous == 1 ~ 1,
@@ -263,11 +266,11 @@ births <- births %>% mutate(pt_subtime = case_when(
 ```
 
 ```{r define outcome}
-myoutcome = 'pt_late'
-births <- births %>% mutate(outcome = births[[myoutcome]])
+myoutcome = 'preterm'
+births <- births %>% mutate(outcome = births[[myoutcome]]) %>% filter(outcome == 1 | preterm == 0)
 
-fp_out <<- paste(fp_out, myoutcome, '/', sep = '')
-fp_img <<- paste(fp_img, myoutcome, '/', sep = '')
+fp_out <<- paste(fp_out, myoutcome, '', sep = '')
+fp_img <<- paste(fp_img, myoutcome, '', sep = '')
 ```
 
 Determine the start of the pregnancy (baby birth date - gestational weeks)
@@ -421,7 +424,7 @@ timeplt <- ggplot(births_dateplt, aes(as.Date(start_date), date_order, color=exp
   
 
 #timeplt
-#ggsave(timeplt, file = image_name('timeplot'), width = 12, height = 7)
+#ggsave(timeplt, file = image_name('timeplot'), width = 7, height = 5)
 ```
 
 Due to computational constraints, exposure rasters are calculated on a cluster; exposure values per person are also assigned on the cluster. This code block saves the latitude, longitude, IDs, and dates to a file so we can extract the PM2.5 values at those locations.
@@ -464,6 +467,8 @@ Boxplots of mean exposure, comparing those who were exposed vs those who were no
 ```{r exposure violins}
 meanexp_box = ggplot(births, aes(x = binary_exposed, y = pm25mean)) +
                 geom_boxplot() + 
+  xlab('Exposed') + 
+  ylab('Mean PM2.5 concentration') + 
   theme_bw()
 
 meanexp_box
@@ -531,8 +536,9 @@ write.csv(epi_htri, file = output_name('half_tri_RR'))
 htri_risk = ggplot(epi_htri, aes(x = htri, y = tab.riskratio, ymin = tab.lower, ymax = tab.upper)) + 
   geom_pointrange() + 
   geom_hline(yintercept = 1) + 
-  ylab("Risk Ratio of Preterm Birth") + 
+  ylab("Risk Ratio of Preterm Birth (log scale)") + 
   xlab("Half Trimester") + 
+  scale_y_log10() + 
   theme_bw()
 
 
@@ -560,13 +566,13 @@ summary(simplecont_exp)  # pm25 mean is significant here
 ```
 
 
-Test a very simple log linear model: outcome is preterm birth (binary), input is covariates and trimester of exposure.
+Test a very simple log linear model: outcome is preterm birth (binary), input is covariates
 
 ```{r models: all, trimester of exposure}
 expvars = c('binary_exposed', 'exposure_tri', 'pm25count_50', 'pm25count_100', 'pm25mean')
 
 for (i in 1:length(expvars)) {
-  mdf = births_trn %>% dplyr::select(c(all_of(partcov)), expvars[[i]])
+  mdf = births_trn %>% dplyr::select(c(all_of(fullcov)), expvars[[i]])
   loglin(mdf, expvars[[i]], FALSE)
   
   }
@@ -596,8 +602,6 @@ compare_tbl
 Only consider people who were exposed
 ```{r restricting to exposed}
 exp_births <- births %>% filter(binary_exposed)
-hist(exp_births$pm25mean)
-
 
 exp_births <- exp_births %>% mutate(ftert_desc  = case_when(
   firetert == 1 ~ "low",
