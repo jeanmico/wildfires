@@ -144,6 +144,11 @@ testtrain = function(df) {
 ```
 
 
+```{r crude associations}
+
+
+```
+
 ```{r loglinear}
 loglin <- function(df, expvar, fire_only) {
   # df <- df %>% filter(train == TRUE)
@@ -490,16 +495,6 @@ tt
 
 ```
 
-
-
-
-
-
-
-
-
-
-
 Simple 2x2 table: is exposure to the wildfire associated with increased risk of PTB?
 ```{r}
 
@@ -507,7 +502,8 @@ Simple 2x2 table: is exposure to the wildfire associated with increased risk of 
 births_before <- births %>% filter(baby_DOB < ymd(fire_start) | binary_exposed == TRUE)
 tst <- epitable(births_before$binary_exposed, births_before$outcome)
 
-epitab(tst, method = 'riskratio')
+epirr = epitab(tst, method = 'riskratio')
+write.csv(epirr, file = output_name('crude_binary_risk'), row.names = FALSE)
 
 ```
 
@@ -557,16 +553,21 @@ births <- testtrain(births)
 births_trn = births %>% filter(testset == 0)
 ```
 
-```{r pm25exposure logit}
+## crude exposures
+```{r crude risk ratios}
 
-simplecont_exp <- glm(outcome ~  pm25mean, data = births_trn, family = 'poisson')
-
-summary(simplecont_exp)  # pm25 mean is significant here
+cont_exp = c('pm25count_50', 'pm25count_100', 'pm25mean', 'binary_exposed')
+for (i in 1:length(cont_exp)) {
+  mdf = births_trn %>% dplyr::select(outcome, cont_exp[[i]])
+  simplecont_exp <- glm(outcome ~  ., data = mdf, family = 'poisson')
+  write.csv(tidy(simplecont_exp), file = output_name(paste('loglinear_crude_', cont_exp[[i]], sep = '')), row.names = FALSE)
+  }
 
 ```
 
+## adjusted exposures
 
-Test a very simple log linear model: outcome is preterm birth (binary), input is covariates
+log linear model: outcome is preterm birth (binary), input is covariates
 
 ```{r models: all, trimester of exposure}
 expvars = c('binary_exposed', 'exposure_tri', 'pm25count_50', 'pm25count_100', 'pm25mean')
