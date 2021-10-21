@@ -64,17 +64,12 @@ time_overlap <- function(df, varname, noexp_value) {
                               tri3 = interval(int_end(tri2), baby_DOB)
                               )
   
-  
+  print(tmpintvl)
+  #return(df)
   # determine each trimester's overlap with the fire
-  df <- df %>% mutate(overlap1 = case_when(int_overlaps(tri1, tmpintvl) ~ 
-                                                     as.duration(intersect(tri1, tmpintvl)),
-                                                   TRUE ~ 0),
-                              overlap2 = case_when(int_overlaps(tri2, tmpintvl) ~ 
-                                                     as.duration(intersect(tri2, tmpintvl)),
-                                                   TRUE ~ 0),
-                              overlap3 = case_when(int_overlaps(tri3, tmpintvl) ~ 
-                                                     as.duration(intersect(tri3, tmpintvl)),
-                                                   TRUE ~ 0) )
+  df <- df %>% mutate(overlap1 = if_else(int_overlaps(tri1, tmpintvl), as.duration(lubridate::intersect(tri1, tmpintvl)), 0),
+                      overlap2 = if_else(int_overlaps(tri2, tmpintvl), as.duration(lubridate::intersect(tri2, tmpintvl)), 0),
+                      overlap3 = if_else(int_overlaps(tri3, tmpintvl), as.duration(lubridate::intersect(tri3, tmpintvl)), 0))
   
   # determine which trimester has the greatest overlap with the fire
   cols = c('overlap1', 'overlap2', 'overlap3')
@@ -85,9 +80,8 @@ time_overlap <- function(df, varname, noexp_value) {
   
   if (!noexp_value) {
     # add the total overlap in days
-    df <- df %>% mutate(total_overlap_days = case_when(
-      preg_fire_ovrlp ~ as.numeric(intersect(tmpintvl, preg_intvl), 'days'),
-      TRUE ~ 0))
+    df <- df %>% mutate(total_overlap_days = if_else(
+      preg_fire_ovrlp, as.numeric(lubridate::intersect(tmpintvl, preg_intvl), 'days'), 0))
   }
   df <- df %>% dplyr::select(-c(tri1, tri2, tri3, overlap1, overlap2, overlap3))
   
@@ -150,7 +144,7 @@ testtrain = function(df) {
 ```
 
 ```{r loglinear}
-loglin <- function(df, expvar, fire_only) {
+loglin <- function(df, expvar, full, fire_only) {
   # df <- df %>% filter(train == TRUE)
   tmpmdl = glm(outcome ~ . , data = df, family = 'poisson')
   
@@ -159,7 +153,7 @@ loglin <- function(df, expvar, fire_only) {
   if (fire_only == TRUE) {
     write.csv(tmpdf, file = output_name(paste('loglinear_fire', expvar, sep = '_')), row.names = FALSE)
   } else{
-    write.csv(tmpdf, file = output_name(paste('loglinear', expvar, sep = '_')), row.names = FALSE)
+    write.csv(tmpdf, file = output_name(paste('loglinear', expvar, full, sep = '_')), row.names = FALSE)
     }
   }
 
@@ -193,9 +187,9 @@ births = births %>% filter(!is.na(gest_weeks))
 n_gest = nrow(births)
 print(n_all - n_gest)
 
-# set nulliparous NA values to 0 (this is how the data are coded)
-births = births %>% mutate(nulliparous = case_when(nulliparous == 1 ~ 1,
-                                                   TRUE ~ 0))
+
+
+
 
 ```
 
@@ -216,6 +210,21 @@ births_tmp <- births_tmp %>% dplyr::rename(name_vec[name_vec %in% names(births_t
 births_tmp <- births_tmp %>% mutate(male = case_when(female == 0 ~1, TRUE~0))
 
 births <- births_tmp
+```
+
+```{r set NA values to 0}
+# this is how the data are coded
+
+# set nulliparous NA values to 0 (this is how the data are coded)
+births = births %>% mutate(nulliparous = case_when(nulliparous == 1 ~ 1, TRUE ~ 0),
+                           mental_disorder = case_when(mental_disorder == 1 ~ 1, TRUE ~ 0),
+                           preexist_diabetes = case_when(preexist_diabetes == 1 ~ 1, TRUE ~ 0),
+                           preexist_HTN = case_when(preexist_HTN == 1 ~ 1, TRUE ~  0),
+                           drug_abuse = case_when(drug_abuse == 1 ~ 1, TRUE ~  0),
+                           alcohol_abuse = case_when(alcohol_abuse == 1 ~ 1, TRUE ~  0),
+                           gest_diabetes = case_when(gest_diabetes == 1 ~ 1, TRUE ~  0),
+                           gest_HTN = case_when(gest_HTN == 1 ~ 1, TRUE ~  0))
+
 ```
 
 Condense multiple binary columns into factors:
@@ -337,7 +346,7 @@ Determine the length of exposure in each trimester and which trimester has the g
 
 ```{r trimester overlap}
 births_tmp = births
-births_tmp = trimester_overlap(births)
+births_tmp = trimester_overlap(births_tmp)
 births_tmp = births_tmp %>% filter(tri_summary != '') # restricting our control group to those pregnant in Nov 2017 or 2018
 births_tmp <- births_tmp %>% filter(total_overlap_days %in% c(0, 12))
 births <- births_tmp
@@ -360,7 +369,8 @@ births <- births %>% mutate(halftri_non = case_when(binary_exposed == TRUE ~
 Make an intro table to make sure our results are correct
 ```{r check work}
 library(tableone)
-mytab <- CreateTableOne(vars = partcov, data = births, factorVars = c('preexist_HTN', 'preexist_diabetes', 'mental_disorder', 'nulliparous'))
+mytab <- CreateTableOne(vars = fullcov, data = births, strata = 'binary_exposed', 
+                        factorVars = c('preexist_HTN', 'preexist_diabetes', 'mental_disorder', 'nulliparous', 'gest_HTN', 'gest_diabetes'))
 
 mytab
 #write.csv(mytab, file = output_name('tableone'), row.names = FALSE)
@@ -470,15 +480,21 @@ births <- births %>%
 
 Boxplots of mean exposure, comparing those who were exposed vs those who were not.
 ```{r exposure violins}
-meanexp_box = ggplot(births, aes(x = binary_exposed, y = pm25mean)) +
+birthsbox = births %>% mutate(Exposed = case_when(
+  binary_exposed ~ "Exposed", 
+  TRUE ~ "Unexposed"))
+
+meanexp_box = ggplot(birthsbox, aes(x = Exposed, y = pm25mean)) +
                 geom_boxplot() + 
-  xlab('Exposed') + 
+  geom_signif(comparisons = list(c('Exposed', 'Unexposed')), map_signif_level = TRUE) +
+  #geom_signif( xmin = 1, xmax = 2, y_position = 20) + 
+  xlab('Exposed to fire') + 
   ylab('Mean PM2.5 concentration') + 
   theme_bw()
 
 meanexp_box
 
-ggsave(meanexp_box, file = image_name('meanexp_fullpreg_boxplot'))
+ggsave(meanexp_box, file = image_name('meanexp_fullpreg_boxplot'), width = 7, height = 5)
 ```
 
 
@@ -570,19 +586,27 @@ for (i in 1:length(cont_exp)) {
 log linear model: outcome is preterm birth (binary), input is covariates
 
 ```{r models: all, trimester of exposure}
-expvars = c('binary_exposed', 'exposure_tri', 'pm25count_50', 'pm25count_100', 'pm25mean')
+expvars = c('binary_exposed',  'pm25mean')
 
 for (i in 1:length(expvars)) {
-  mdf = births_trn %>% dplyr::select(c(all_of(fullcov)), expvars[[i]])
-  loglin(mdf, expvars[[i]], FALSE)
-  
+  for (j in c('crude', 'partial', 'full')){
+    if (j == 'crude') {
+        mdf = births_trn %>% dplyr::select(outcome, expvars[[i]])
+        #simplecont_exp <- glm(outcome ~  ., data = mdf, family = 'poisson')
+    } else if (j == 'partial') {
+      mdf = births_trn %>% dplyr::select(c(all_of(partcov)), expvars[[i]])
+    } else {
+      mdf = births_trn %>% dplyr::select(c(all_of(fullcov[-9])), expvars[[i]])
+  }
+    loglin(mdf, expvars[[i]], j, FALSE)
+  }
   }
 
 ```
 
-### QUESTION 2 ####################
+# QUESTION 2 ####################
 ###################################
-# Risk by exposure DURING the fire
+## Risk by exposure DURING the fire
 
 First, test high fire tertiles against low fire tertiles **in the control group** to determine whether there are significant differences.
 ```{r high fire vs low fire}
